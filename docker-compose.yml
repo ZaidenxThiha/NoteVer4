@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+    image: custom-mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=YourStrong@Passw0rd
+      - MYSQL_USER=noteapp_user
+      - MYSQL_PASSWORD=YourStrong@Passw0rd
+      - MYSQL_DATABASE=noteapp
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - noteapp-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pYourStrong@Passw0rd"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  phpapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - noteapp-network
+    environment:
+      - APACHE_DOCUMENT_ROOT=/var/www/html
+      - DB_HOST=mysql
+      - DB_USER=noteapp_user
+      - DB_PASS=YourStrong@Passw0rd
+      - DB_NAME=noteapp
+    command: >
+      bash -c "sleep 10 && php /var/www/html/websocket_server.php & apache2-foreground"
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - noteapp-network
+
+networks:
+  noteapp-network:
+    driver: bridge
+
+volumes:
+  mysql-data:

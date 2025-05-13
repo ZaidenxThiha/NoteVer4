@@ -1,0 +1,1451 @@
+body {
+    background-color: #fffffdea;
+    font-family: sans-serif;
+}
+
+/* Header */
+.header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    max-width: 100vw;
+    width: 100%;
+    background-color: #feeed2;
+    border-bottom: 1px solid #dedede;
+}
+
+.header-bar .d-flex {
+    gap: 10px;
+    align-items: center;
+}
+
+/* Main Content */
+.main-content {
+    margin-left: 60px;
+    padding: 20px;
+}
+
+/* Note Form Container (for Autosave) */
+.note-form-container {
+    background-color: #feeed2;
+    border-radius: 15px;
+    padding: 15px;
+    margin: 20px 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    max-width: 100%;
+}
+
+/* Inline Note Form */
+#inlineNoteForm input#inlineTitle,
+#inlineNoteForm textarea#inlineContent,
+#inlineNoteForm input#inlineLabels {
+    background-color: #feeed2;
+    border: 1px solid #ffe3b4;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    color: #333;
+    box-shadow: none;
+    outline: none;
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+#inlineNoteForm textarea#inlineContent {
+    height: 100px;
+    resize: vertical;
+}
+
+#inlineNoteForm input#inlineTitle::placeholder,
+#inlineNoteForm textarea#inlineContent::placeholder,
+#inlineNoteForm input#inlineLabels::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+#inlineNoteForm input#inlineTitle:focus,
+#inlineNoteForm textarea#inlineContent:focus,
+#inlineNoteForm input#inlineLabels:focus {
+    border-color: #ffe3b4;
+    box-shadow: 0 0 0 0.1rem rgba(255, 195, 120, 0.4);
+}
+
+/* Modal Note Form */
+#createNoteModal .modal-body {
+    padding: 20px;
+}
+
+#modalNoteForm input#modalTitle,
+#modalNoteForm textarea#modalContent,
+#modalNoteForm input#modalLabels {
+    background-color: #feeed2;
+    border: 1px solid #ffe3b4;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    color: #333;
+    box-shadow: none;
+    outline: none;
+}
+
+#modalNoteForm textarea#modalContent {
+    height: 200px;
+    resize: none;
+}
+
+#modalNoteForm input#modalTitle::placeholder,
+#modalNoteForm textarea#modalContent::placeholder,
+#modalNoteForm input#modalLabels::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+#modalNoteForm input#modalTitle:focus,
+#modalNoteForm textarea#modalContent:focus,
+#modalNoteForm input#modalLabels:focus {
+    border-color: #ffe3b4;
+    box-shadow: 0 0 0 0.1rem rgba(255, 195, 120, 0.4);
+}
+
+/* File Input and Clear Button */
+.form-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Notes Grid Container */
+.notes-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 20px;
+    padding: 20px 0;
+    max-width: 100%;
+    align-content: start;
+    align-items: start;
+}
+
+/* Note Card Base Style */
+.note-card {
+    width: 100%;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.1s;
+    position: relative;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    min-height: 160px;
+}
+
+/* Create New Note Card */
+.create-note-card {
+    background-color: #e8e8e8;
+    flex-direction: column;
+    padding: 20px;
+    width: 100%;
+    min-height: 160px;
+}
+
+.create-note-card:hover {
+    transform: scale(1.01);
+}
+
+.create-note-card .plus-icon {
+    font-size: 3rem;
+    color: #444;
+    font-weight: 300;
+    line-height: 1;
+    margin-bottom: 10px;
+}
+
+.create-note-card p {
+    margin: 0;
+    color: #444;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+/* Existing Note Card */
+.existing-note-card {
+    background-color: #f5deb3;
+    padding: 20px;
+    overflow: hidden;
+    align-items: flex-start;
+    justify-content: flex-start;
+    position: relative;
+    min-height: 160px;
+    flex-direction: column;
+}
+
+.existing-note-card:hover {
+    transform: scale(1.01);
+}
+
+.existing-note-card h6 {
+    margin: 0 0 8px 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #000;
+    text-align: left;
+    width: 100%;
+}
+
+.existing-note-card p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+}
+
+/* Pin button */
+.pin-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #ccc;
+    font-size: 16px;
+    transition: background-color 0.2s, color 0.2s;
+    transform: rotate(45deg);
+}
+
+.pin-btn.pinned {
+    color: #ff6b6b;
+}
+
+.pin-btn:hover {
+    background-color: rgba(255, 107, 107, 0.1);
+    color: #ff6b6b;
+}
+
+/* Delete button */
+.delete-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #666;
+    font-size: 16px;
+    transition: background-color 0.2s;
+}
+
+.delete-btn:hover {
+    background-color: rgba(255, 0, 0, 0.1);
+    color: #ff0000;
+}
+
+/* Image button */
+.image-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 45px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #666;
+    font-size: 16px;
+    transition: background-color 0.2s;
+}
+
+.image-btn:hover {
+    background-color: rgba(0, 123, 255, 0.1);
+    color: #007bff;
+}
+
+/* Restore button */
+.restore-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 45px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #28a745;
+    font-size: 16px;
+    transition: background-color 0.2s;
+}
+
+.restore-btn:hover {
+    background-color: rgba(40, 167, 69, 0.1);
+    color: #218838;
+}
+
+/* Empty trash message */
+.empty-trash-message {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: #666;
+    font-style: italic;
+    margin-top: 40px;
+}
+
+.empty-trash-message p {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+/* Sidebar item active state */
+.sidebar-item.active {
+    background-color: #ffe3b4;
+    border-radius: 8px;
+}
+
+/* Label button */
+.label-btn {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #666;
+    font-size: 16px;
+    transition: background-color 0.2s;
+}
+
+.label-btn:hover {
+    background-color: rgba(0, 123, 255, 0.1);
+    color: #007bff;
+}
+
+/* Note Labels Display - Google Keep style */
+.note-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+    margin-bottom: 5px;
+}
+
+.note-label-tag {
+    background-color: #e8f0fe;
+    color: #1967d2;
+    padding: 2px 10px;
+    border: none;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    line-height: 1;
+}
+
+/* Different label colors for variety */
+.note-label-tag:nth-child(2n) {
+    background-color: #fce8e6;
+    color: #d33b2c;
+}
+
+.note-label-tag:nth-child(3n) {
+    background-color: #e6f4ea;
+    color: #137333;
+}
+
+.note-label-tag:nth-child(4n) {
+    background-color: #fff7e6;
+    color: #b06000;
+}
+
+/* Title and labels container */
+.note-title-container {
+    width: 100%;
+}
+
+.note-title-container h6 {
+    margin: 0 0 8px 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #000;
+    text-align: left;
+}
+
+/* Image attachments display */
+.note-images {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.note-image-thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* Image preview grid */
+.image-preview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 10px;
+}
+
+.image-preview-item {
+    position: relative;
+    aspect-ratio: 1;
+}
+
+.image-preview-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+.image-preview-item .remove-preview {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #ff0000;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Image viewer modal */
+.image-viewer-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.image-viewer-modal img {
+    max-width: 90%;
+    max-height: 90%;
+    object-fit: contain;
+}
+
+.image-viewer-modal .close-viewer {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 30px;
+    cursor: pointer;
+}
+
+/* List View */
+.notes-container.list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.notes-container.list-view .note-card {
+    width: 100%;
+    aspect-ratio: auto;
+    height: auto;
+    min-height: 80px;
+}
+
+.notes-container.list-view .existing-note-card {
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 15px 20px;
+}
+
+.notes-container.list-view .existing-note-card div {
+    width: 100%;
+}
+
+.notes-container.list-view .existing-note-card h6 {
+    margin-bottom: 5px;
+}
+
+.notes-container.list-view .existing-note-card p {
+    -webkit-line-clamp: 2;
+}
+
+/* Sidebar */
+.sidebar {
+    height: 100vh;
+    background-color: #feeed2;
+    width: 60px;
+    transition: width 0.3s ease;
+    overflow: hidden;
+    position: fixed;
+    z-index: 1050;
+    border-right: 1px solid #dedede;
+    display: flex;
+    flex-direction: column;
+    padding: 10px 0;
+}
+
+.sidebar.expanded {
+    width: 180px;
+}
+
+.sidebar .toggle-btn {
+    background: none;
+    border: none;
+    color: #333;
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+    margin-left: 10px;
+}
+
+.sidebar-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0 10px;
+}
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px;
+    cursor: pointer;
+    margin-left: 10px;
+}
+
+.sidebar-item:hover {
+    background-color: #ffe3b4;
+    border-radius: 8px;
+}
+
+.sidebar .label {
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.sidebar.expanded .label {
+    opacity: 1;
+}
+
+.sidebar-toggle {
+    background: none;
+    border: none;
+    color: #333;
+    font-size: 1.5rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    display: none;
+}
+
+/* Profile Button */
+.profile-btn {
+    margin-top: auto;
+    border: none;
+    background: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px;
+    margin-left: 10px;
+}
+
+.profile-btn .activation-status {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.profile-btn .activation-status.activated {
+    color: #28a745;
+}
+
+.profile-btn .activation-status.not-activated {
+    color: #dc3545;
+}
+
+.profile-btn .logout-link {
+    color: #666;
+    transition: color 0.2s;
+}
+
+.profile-btn .logout-link:hover {
+    color: #ff0000;
+}
+
+/* Label filter buttons in sidebar */
+.label-filters-list {
+    padding: 5px 10px 5px 25px;
+    display: none;
+    border-left: 2px solid #dedede;
+    margin-left: 30px;
+    margin-bottom: 10px;
+}
+
+.sidebar.expanded .label-filters-list {
+    display: block;
+}
+
+.label-filter-btn {
+    background-color: transparent;
+    border: none;
+    color: #666;
+    padding: 6px 10px;
+    margin: 2px 0;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    width: 100%;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.label-filter-btn i {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.label-filter-btn.active {
+    background-color: #ffe3b4;
+    color: #333;
+}
+
+.label-filter-btn:hover {
+    background-color: #feeed2;
+    color: #333;
+}
+
+.label-filter-btn.active:hover {
+    background-color: #fcd89a;
+}
+
+/* Main Content - Adjust margin based on sidebar state */
+.main-content {
+    margin-left: 60px;
+    transition: margin-left 0.3s ease;
+    width: calc(100% - 60px);
+}
+
+.main-content.sidebar-expanded {
+    margin-left: 180px;
+    width: calc(100% - 180px);
+}
+
+/* Search Box */
+.input-group .form-control {
+    background-color: #dedede;
+    border: none;
+    border-radius: 20px 0 0 20px;
+}
+
+.input-group .input-group-text {
+    background-color: #dedede;
+    border: none;
+    border-radius: 0 20px 20px 0;
+}
+
+/* Filter and Toggle Buttons */
+#filterBtn {
+    border: none;
+    background-color: #feeed2;
+    color: #222121;
+}
+
+#filterBtn:hover {
+    background-color: #ffe3b4;
+}
+
+#toggleViewBtn {
+    white-space: nowrap;
+    font-size: 0.9rem;
+    padding: 6px 12px;
+}
+
+/* Label Management Styles */
+.label-input-group {
+    display: flex;
+    gap: 10px;
+}
+
+.labels-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.label-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+}
+
+.label-item:hover {
+    background-color: #e9ecef;
+}
+
+.label-name {
+    flex: 1;
+    margin-right: 10px;
+}
+
+.label-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.label-actions button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    color: #666;
+    font-size: 14px;
+}
+
+.label-actions button:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.label-actions .edit-btn:hover {
+    color: #007bff;
+}
+
+.label-actions .delete-btn:hover {
+    color: #dc3545;
+}
+
+/* Note labels checkbox */
+.note-labels-checkboxes {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.note-label-checkbox {
+    margin-bottom: 10px;
+}
+
+.note-label-checkbox input[type='checkbox'] {
+    margin-right: 8px;
+}
+
+.note-label-checkbox label {
+    font-size: 0.9rem;
+    color: #333;
+}
+
+/* No search results message */
+.no-results {
+    grid-column: 2 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: #666;
+    font-style: italic;
+}
+
+/* Modal */
+.modal-content {
+    background-color: #ffe3b4;
+    border-radius: 15px;
+    padding: 20px;
+}
+
+.modal-header {
+    background-color: #ffe3b4;
+    border-bottom: 0.5px solid #ffe3b4;
+    padding: 10px 10px;
+}
+
+/* Share Modal Styles */
+#shareModal #shareEmails {
+    background-color: #feeed2;
+    border: 1px solid #ffe3b4;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    color: #333;
+}
+
+#shareModal #shareEmails::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+#shareModal #shareEmails:focus {
+    border-color: #ffe3b4;
+    box-shadow: 0 0 0 0.1rem rgba(255, 195, 120, 0.4);
+}
+
+.share-settings {
+    margin-top: 10px;
+}
+
+.share-setting {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.share-setting span {
+    flex: 1;
+}
+
+.share-setting select {
+    padding: 4px;
+    border-radius: 6px;
+    border: 1px solid #dedede;
+}
+
+.share-setting .btn-danger {
+    background-color: #dc3545;
+    border: none;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+}
+
+.share-setting .btn-danger:hover {
+    background-color: #c82333;
+}
+
+/* Password Modal */
+#passwordModal #notePassword {
+    background-color: #feeed2;
+    border: 1px solid #ffe3b4;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    color: #333;
+}
+
+#passwordModal #notePassword::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+#passwordModal #notePassword:focus {
+    border-color: #ffe3b4;
+    box-shadow: 0 0 0 0.1rem rgba(255, 195, 120, 0.4);
+}
+
+/* Rename Label Modal */
+#renameLabelModal #renameLabelOld,
+#renameLabelModal #renameLabelNew {
+    background-color: #feeed2;
+    border: 1px solid #ffe3b4;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    color: #333;
+}
+
+#renameLabelModal #renameLabelOld::placeholder,
+#renameLabelModal #renameLabelNew::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+#renameLabelModal #renameLabelOld:focus,
+#renameLabelModal #renameLabelNew:focus {
+    border-color: #ffe3b4;
+    box-shadow: 0 0 0 0.1rem rgba(255, 195, 120, 0.4);
+}
+
+/* Note Settings Dropdown */
+.dropdown {
+    position: absolute;
+    top: 10px;
+    right: 40px;
+}
+
+.dropdown .settings-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #666;
+    font-size: 16px;
+    transition: background-color 0.2s;
+}
+
+.dropdown .settings-button:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: #feeed2;
+    min-width: 150px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    z-index: 1000;
+}
+
+.dropdown-content a {
+    display: block;
+    padding: 8px 12px;
+    color: #333;
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: background-color 0.2s;
+}
+
+.dropdown-content a:hover {
+    background-color: #ffe3b4;
+}
+
+/* UI Messages (Saving, Saved, Error) */
+.saving,
+.saved,
+.error {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 20px;
+    border-radius: 8px;
+    z-index: 10000;
+    font-size: 0.9rem;
+}
+
+.saving {
+    background-color: #007bff;
+    color: white;
+}
+
+.saved {
+    background-color: #28a745;
+    color: white;
+}
+
+.error {
+    background-color: #dc3545;
+    color: white;
+}
+
+.animate-pulse {
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.5s;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.animate-fade-out {
+    animation: fadeOut 0.5s forwards;
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+/* Note Shared Information */
+.note-shared {
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Responsive Design - Mobile First Approach */
+
+/* Mobile styles (smartphones) */
+@media (max-width: 575px) {
+    .sidebar-toggle {
+        font-size: 1.2rem;
+    }
+
+    .header-bar {
+        padding: 10px;
+    }
+
+    .header-bar .d-flex {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .input-group {
+        width: 100% !important;
+        max-width: none !important;
+        order: 3;
+    }
+
+    #filterBtn,
+    #toggleViewBtn {
+        font-size: 0.75rem;
+        padding: 4px 8px;
+    }
+
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        width: 0;
+        transform: translateX(0);
+        z-index: 1060;
+    }
+
+    .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.3s ease, width 0.3s ease;
+    }
+
+    .sidebar.expanded {
+        width: 250px !important;
+        transform: translateX(0);
+        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .main-content {
+        margin-left: 0;
+        padding: 10px;
+        width: 100%;
+    }
+
+    .main-content.sidebar-expanded {
+        margin-left: 0;
+        width: 100%;
+        filter: brightness(0.7);
+    }
+
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 10px;
+    }
+
+    .note-card {
+        min-height: 140px;
+    }
+
+    .create-note-card .plus-icon {
+        font-size: 2rem;
+    }
+
+    .create-note-card p {
+        font-size: 0.8rem;
+    }
+
+    .existing-note-card {
+        padding: 15px;
+    }
+
+    .existing-note-card h6 {
+        font-size: 0.95rem;
+    }
+
+    .existing-note-card p {
+        font-size: 0.8rem;
+        -webkit-line-clamp: 2;
+    }
+
+    .pin-btn,
+    .delete-btn,
+    .image-btn,
+    .label-btn {
+        width: 24px;
+        height: 24px;
+        font-size: 12px;
+        padding: 0;
+    }
+
+    .note-labels {
+        margin-top: 3px;
+    }
+
+    .note-label-tag {
+        font-size: 10px;
+        padding: 1px 6px;
+    }
+
+    .note-images {
+        margin-top: 5px;
+    }
+
+    .note-image-thumb {
+        width: 30px;
+        height: 30px;
+    }
+
+    /* Modal adjustments */
+    .modal-dialog {
+        margin: 10px;
+    }
+
+    .modal-content {
+        padding: 15px;
+    }
+
+    /* List view on mobile */
+    .notes-container.list-view .note-card {
+        min-height: 60px;
+    }
+
+    /* Note form adjustments */
+    .note-form-container {
+        padding: 10px;
+        margin: 10px 0;
+    }
+
+    #inlineNoteForm input#inlineTitle,
+    #inlineNoteForm textarea#inlineContent,
+    #inlineNoteForm input#inlineLabels {
+        font-size: 0.9rem;
+        padding: 8px;
+    }
+
+    #inlineNoteForm textarea#inlineContent {
+        min-height: 60px;
+    }
+
+    #inlineNoteForm input#image-upload::-webkit-file-upload-button,
+    #inlineNoteForm button[type='button'] {
+        font-size: 0.8rem;
+        padding: 5px 10px;
+    }
+}
+
+/* Tablet styles */
+@media (min-width: 576px) and (max-width: 991px) {
+    .header-bar {
+        padding: 15px;
+    }
+
+    .sidebar {
+        width: 60px;
+        z-index: 1060;
+    }
+
+    .sidebar.expanded {
+        width: 200px;
+        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .main-content {
+        margin-left: 60px;
+        padding: 15px;
+        width: calc(100% - 60px);
+    }
+
+    .main-content.sidebar-expanded {
+        margin-left: 200px;
+        width: calc(100% - 200px);
+    }
+
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 15px;
+    }
+
+    .note-card {
+        min-height: 160px;
+    }
+
+    .existing-note-card h6 {
+        font-size: 1rem;
+    }
+
+    .existing-note-card p {
+        font-size: 0.85rem;
+    }
+
+    .pin-btn,
+    .delete-btn,
+    .image-btn,
+    .label-btn {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
+    }
+
+    /* Show sidebar toggle on tablets */
+    .sidebar-toggle {
+        display: inline-block !important;
+    }
+
+    .sidebar {
+        width: 0;
+        padding: 0;
+        overflow: hidden;
+    }
+
+    .sidebar.expanded {
+        width: 280px;
+        padding: 10px 0;
+        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .main-content {
+        margin-left: 0;
+        transition: margin-left 0.3s ease, filter 0.3s ease;
+    }
+
+    /* Optional: Dim the main content when sidebar is open on mobile */
+    .main-content.sidebar-expanded {
+        filter: brightness(0.7);
+    }
+
+    /* Input group responsive behavior */
+    .input-group {
+        max-width: 250px !important;
+    }
+
+    /* Note form adjustments */
+    .note-form-container {
+        padding: 12px;
+    }
+
+    #inlineNoteForm input#inlineTitle,
+    #inlineNoteForm textarea#inlineContent,
+    #inlineNoteForm input#inlineLabels {
+        font-size: 0.95rem;
+    }
+}
+
+/* Desktop styles */
+@media (min-width: 992px) {
+    .sidebar {
+        width: 60px;
+    }
+
+    .sidebar.expanded {
+        width: 180px;
+    }
+
+    .main-content {
+        margin-left: 60px;
+        padding: 20px;
+        width: calc(100% - 60px);
+    }
+
+    .main-content.sidebar-expanded {
+        margin-left: 180px;
+        width: calc(100% - 180px);
+    }
+
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 20px;
+    }
+
+    .note-card {
+        min-height: 180px;
+    }
+
+    /* Hide mobile toggle on desktop */
+    .sidebar-toggle {
+        display: none !important;
+    }
+
+    .input-group {
+        max-width: 300px !important;
+    }
+
+    /* Note form adjustments */
+    .note-form-container {
+        max-width: 800px;
+    }
+}
+
+/* Large desktop styles */
+@media (min-width: 1200px) {
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
+
+    .main-content {
+        padding: 30px;
+    }
+
+    .header-bar {
+        padding: 20px 30px;
+    }
+}
+
+/* Extra large desktop styles */
+@media (min-width: 1400px) {
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 25px;
+    }
+
+    .note-card {
+        min-height: 200px;
+    }
+}
+
+/* Landscape mode for mobile devices */
+@media (max-height: 500px) and (orientation: landscape) {
+    .header-bar {
+        padding: 5px 15px;
+    }
+
+    .notes-container {
+        gap: 10px;
+    }
+
+    .note-card {
+        min-height: 120px;
+    }
+
+    .modal-dialog {
+        margin: 5px auto;
+    }
+}
+
+/* Touch-friendly adjustments */
+@media (hover: none) {
+    .pin-btn,
+    .delete-btn,
+    .image-btn,
+    .label-btn {
+        opacity: 1 !important;
+    }
+
+    .sidebar-item {
+        padding: 10px;
+    }
+
+    .label-filter-btn {
+        padding: 8px 12px;
+        min-height: 40px;
+    }
+}
+
+/* Print styles */
+@media print {
+    .sidebar,
+    .header-bar {
+        display: none !important;
+    }
+
+    .main-content {
+        margin: 0;
+        padding: 0;
+    }
+
+    .notes-container {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+
+    .pin-btn,
+    .delete-btn,
+    .image-btn,
+    .label-btn {
+        display: none !important;
+    }
+}
+
+/* Accessibility improvements */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Container max-width for very large screens */
+@media (min-width: 1800px) {
+    .main-content {
+        max-width: 1600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+}
