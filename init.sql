@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS notes (
     is_pinned TINYINT DEFAULT 0,
     pinned_at DATETIME NULL,
     password_hash VARCHAR(255) DEFAULT NULL,
-    is_trashed TINYINT(1) DEFAULT 0, -- Added to support trash view
+    is_locked TINYINT DEFAULT 0, -- Added to support password protection flag
+    is_trashed TINYINT(1) DEFAULT 0, -- Supports trash view
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

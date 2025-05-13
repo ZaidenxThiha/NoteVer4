@@ -1,12 +1,18 @@
 const AutoSave = {
   queue: [],
-  retryInterval: 1000, // Start with 1s
-  maxRetryInterval: 60000, // Max 1min
+  retryInterval: 1000,
+  maxRetryInterval: 60000,
   storageKey: "noteapp_pending_saves",
   lastSavedData: null,
   isProcessing: false,
-  pendingImages: [], // Store pending images for upload
+  pendingImages: [],
   retryTimeout: null,
+
+  // Helper function to format date as MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
+  formatMySQLDateTime(date) {
+    const d = new Date(date);
+    return d.toISOString().slice(0, 19).replace("T", " ");
+  },
 
   init({
     titleInput,
@@ -31,39 +37,59 @@ const AutoSave = {
     this.onIdUpdate = onIdUpdate;
     this.onImageUpload = onImageUpload;
 
-    // Load any pending saves from LocalStorage
     this.loadQueue();
     console.log("Autosave initialized, queue:", this.queue);
 
-    // Save handler
     this.flush = async () => {
       const data = {
         title: titleInput.value.trim() || modalTitleInput.value.trim(),
         content: contentInput.value.trim() || modalContentInput.value.trim(),
         labels: labelInput.value.trim() || modalLabelInput.value.trim(),
-        updated_at: new Date().toISOString(),
+        updated_at: this.formatMySQLDateTime(new Date()),
       };
-      // Check for pending images
       const hasImages = imageInput.files.length > 0;
-      // Only queue if data has changed or there are images to upload
       if (
         (data.content || hasImages) &&
         (JSON.stringify(data) !== JSON.stringify(this.lastSavedData) ||
           hasImages)
       ) {
+        // Use a unique temporary ID for offline notes
+        const tempId = `offline-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 9)}`;
         this.queueSave(
-          window.currentNoteId,
+          tempId,
           data,
           hasImages ? Array.from(imageInput.files) : []
         );
         this.lastSavedData = data;
         if (hasImages) {
           this.pendingImages = Array.from(imageInput.files);
-          imageInput.value = ""; // Clear the input after queuing
+          imageInput.value = "";
+        }
+        if (!navigator.onLine && typeof saveToIndexedDB === "function") {
+          try {
+            await saveToIndexedDB("notes", {
+              id: tempId,
+              title: data.title,
+              content: data.content,
+              labels: data.labels,
+              updated_at: data.updated_at,
+              is_offline: true,
+            });
+            console.log(`Saved note ${tempId} to IndexedDB`);
+            UI.showOfflineStatus();
+            loadNotes();
+          } catch (error) {
+            console.error(`Failed to save note ${tempId} to IndexedDB:`, error);
+            UI.showError(
+              "Offline: Failed to save note locally. Please try again."
+            );
+            return; // Prevent further queuing on failure
+          }
         }
       } else {
         console.log("No changes to save or empty content:", data);
-        // Hide and reset form if no content and no images
         if (!data.content && !hasImages) {
           const formContainer = document.getElementById("note-form-container");
           if (formContainer) {
@@ -81,23 +107,42 @@ const AutoSave = {
       }
     };
 
-    // Start retrying pending saves
     this.processQueue();
+    window.addEventListener("online", () => {
+      console.log("Device back online, syncing queue...");
+      UI.showSyncProgress();
+      this.processQueue();
+    });
   },
 
   queueSave(noteId, data, images) {
-    // Remove existing entries for the same noteId to prevent duplicates
+    // Treat temporary IDs (starting with 'offline-' or '17') as new notes
+    if (noteId && (noteId.startsWith("offline-") || noteId.startsWith("17"))) {
+      console.log(`Temporary ID ${noteId} detected, treating as new note`);
+      noteId = null;
+    }
     this.queue = this.queue.filter((item) => item.noteId !== noteId);
     this.queue.push({
       noteId,
-      data,
+      data: {
+        ...data,
+        updated_at: this.formatMySQLDateTime(data.updated_at),
+      },
       images,
       retries: 0,
       nextRetry: Date.now(),
-      locked: false, // Track if the note is locked
+      locked: false,
+      tempId:
+        noteId ||
+        `offline-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, // Store tempId for syncing
     });
     this.saveQueue();
-    console.log("Queued save:", { noteId, data, hasImages: images.length > 0 });
+    console.log("Queued save:", {
+      noteId: noteId || "new",
+      tempId: noteId || this.queue[this.queue.length - 1].tempId,
+      data,
+      hasImages: images.length > 0,
+    });
     this.processQueue();
   },
 
@@ -125,7 +170,11 @@ const AutoSave = {
 
       for (const item of pending) {
         try {
-          console.log("Processing queued save:", item);
+          console.log("Processing queued save:", {
+            tempId: item.tempId,
+            noteId: item.noteId,
+            data: item.data,
+          });
           if (typeof API === "undefined") {
             throw new Error(
               "API is not defined. Please check if api.js is loaded."
@@ -134,8 +183,11 @@ const AutoSave = {
 
           UI.showSaving();
 
-          // Check if note is accessible and editable
-          if (item.noteId) {
+          if (
+            item.noteId &&
+            !item.noteId.startsWith("offline-") &&
+            !item.noteId.startsWith("17")
+          ) {
             try {
               const accessResponse = await API.loadNote(item.noteId);
               if (accessResponse.is_locked && !accessResponse.success) {
@@ -174,9 +226,14 @@ const AutoSave = {
                               response.id || item.noteId
                             );
                           }
-                          this.queue = this.queue.filter((q) => q !== item);
+                          this.queue = this.queue.filter(
+                            (q) => q.tempId !== item.tempId
+                          );
                           this.saveQueue();
                           UI.showSaved();
+                          if (typeof deleteFromIndexedDB === "function") {
+                            await deleteFromIndexedDB("notes", item.tempId);
+                          }
                           console.log(
                             "Save successful after password prompt:",
                             response
@@ -201,10 +258,12 @@ const AutoSave = {
                         "Password prompt canceled for note ID:",
                         item.noteId
                       );
-                      this.queue = this.queue.filter((q) => q !== item);
+                      this.queue = this.queue.filter(
+                        (q) => q.tempId !== item.tempId
+                      );
                       this.saveQueue();
                       UI.showError(
-                        "Password prompt canceled. Please unlock the note to save changes."
+                        "Password prompt canceled. Note removed from queue."
                       );
                       resolve();
                     }
@@ -220,7 +279,7 @@ const AutoSave = {
                   "User lacks permission to edit note ID:",
                   item.noteId
                 );
-                this.queue = this.queue.filter((q) => q !== item);
+                this.queue = this.queue.filter((q) => q.tempId !== item.tempId);
                 this.saveQueue();
                 UI.showError("You do not have permission to save this note.");
                 continue;
@@ -266,9 +325,14 @@ const AutoSave = {
                               response.id || item.noteId
                             );
                           }
-                          this.queue = this.queue.filter((q) => q !== item);
+                          this.queue = this.queue.filter(
+                            (q) => q.tempId !== item.tempId
+                          );
                           this.saveQueue();
                           UI.showSaved();
+                          if (typeof deleteFromIndexedDB === "function") {
+                            await deleteFromIndexedDB("notes", item.tempId);
+                          }
                           console.log(
                             "Save successful after password prompt:",
                             response
@@ -293,10 +357,12 @@ const AutoSave = {
                         "Password prompt canceled for note ID:",
                         item.noteId
                       );
-                      this.queue = this.queue.filter((q) => q !== item);
+                      this.queue = this.queue.filter(
+                        (q) => q.tempId !== item.tempId
+                      );
                       this.saveQueue();
                       UI.showError(
-                        "Password prompt canceled. Please unlock the note to save changes."
+                        "Password prompt canceled. Note removed from queue."
                       );
                       resolve();
                     }
@@ -308,16 +374,36 @@ const AutoSave = {
             }
           }
 
-          // Save the note (unlocked or new note)
           item.locked = false;
           const response = await this.onSave(item.noteId, item.data);
-          console.log("Server response:", response);
+          console.log("Server response for tempId", item.tempId, ":", response);
           if (response.success) {
             if (!item.noteId && response.id) {
               this.onIdUpdate(response.id);
               item.noteId = response.id;
+              // Update IndexedDB with server ID
+              if (typeof saveToIndexedDB === "function") {
+                try {
+                  await saveToIndexedDB("notes", {
+                    id: response.id,
+                    title: item.data.title,
+                    content: item.data.content,
+                    labels: item.data.labels,
+                    updated_at: item.data.updated_at,
+                    is_offline: false,
+                  });
+                  await deleteFromIndexedDB("notes", item.tempId);
+                  console.log(
+                    `Updated IndexedDB: tempId ${item.tempId} -> serverId ${response.id}`
+                  );
+                } catch (error) {
+                  console.error(
+                    `Failed to update IndexedDB for note ${response.id}:`,
+                    error
+                  );
+                }
+              }
             }
-            // If there are images, upload them
             if (item.images.length > 0) {
               try {
                 const formData = new FormData();
@@ -337,10 +423,16 @@ const AutoSave = {
                 );
               }
             }
-            this.queue = this.queue.filter((q) => q !== item);
+            this.queue = this.queue.filter((q) => q.tempId !== item.tempId);
             this.saveQueue();
             UI.showSaved();
-            console.log("Save successful, removed from queue:", response);
+            if (typeof deleteFromIndexedDB === "function") {
+              await deleteFromIndexedDB("notes", item.tempId);
+            }
+            console.log("Save successful, removed from queue:", {
+              tempId: item.tempId,
+              serverId: response.id,
+            });
           } else {
             throw new Error(response.error || "Unknown server error");
           }
@@ -348,37 +440,65 @@ const AutoSave = {
           item.retries++;
           if (item.retries >= maxRetries) {
             console.error(
-              `Autosave failed after ${item.retries} attempts:`,
+              `Autosave failed after ${item.retries} attempts for tempId ${item.tempId}:`,
               error.message,
               item
             );
-            this.queue = this.queue.filter((q) => q !== item);
+            this.queue = this.queue.filter((q) => q.tempId !== item.tempId);
             this.saveQueue();
             UI.showError(
-              "Failed to save note after multiple attempts. Please try again."
+              `Failed to save note after multiple attempts: ${error.message}. Please try again.`
             );
-          } else if (error.message.includes("403") && !error.cause?.is_locked) {
-            console.error(
-              "Unrecoverable permission error, stopping retries:",
-              error.message,
-              item
-            );
-            this.queue = this.queue.filter((q) => q !== item);
-            this.saveQueue();
-            // Suppress redundant error message, as handled above
-            console.log(
-              "Permission error already displayed, skipping additional UI error"
-            );
+          } else if (
+            error.message.includes("403") &&
+            error.cause &&
+            !error.cause.is_locked
+          ) {
+            if (error.cause.error === "User not authenticated") {
+              console.error(
+                "Authentication error, stopping retries for tempId",
+                item.tempId,
+                ":",
+                error.message,
+                item
+              );
+              this.queue = this.queue.filter((q) => q.tempId !== item.tempId);
+              this.saveQueue();
+              UI.showError("Session expired. Please log in again.");
+              window.location.href = "login.php";
+            } else {
+              item.nextRetry =
+                now +
+                Math.min(
+                  this.retryInterval * Math.pow(2, item.retries),
+                  this.maxRetryInterval
+                );
+              this.saveQueue();
+              UI.showError(
+                `Permission error: ${
+                  error.cause.error || "Unknown error"
+                }. Retrying...`
+              );
+              console.error(
+                "Permission error, retrying for tempId",
+                item.tempId,
+                ":",
+                error.message,
+                item
+              );
+            }
           } else if (
             error.message.includes("API is not defined") ||
             error.message.includes("Unexpected token")
           ) {
             console.error(
-              "Unrecoverable error, stopping retries:",
+              "Unrecoverable error, stopping retries for tempId",
+              item.tempId,
+              ":",
               error.message,
               item
             );
-            this.queue = this.queue.filter((q) => q !== item);
+            this.queue = this.queue.filter((q) => q.tempId !== item.tempId);
             this.saveQueue();
             UI.showError(
               error.message.includes("API is not defined")
@@ -393,17 +513,66 @@ const AutoSave = {
                 this.maxRetryInterval
               );
             if (item.locked) {
-              item.nextRetry += 10000; // Add 10s delay for locked notes
+              item.nextRetry += 10000;
               UI.showError("Note is locked. Please unlock it to save changes.");
             }
             this.saveQueue();
-            console.error("Save failed, retrying:", error.message, item);
+            console.error(
+              "Save failed, retrying for tempId",
+              item.tempId,
+              ":",
+              error.message,
+              item
+            );
           }
         }
       }
+
+      if (typeof getFromIndexedDB === "function") {
+        try {
+          const offlineRequests = await getFromIndexedDB("offlineRequests");
+          UI.showSyncProgress();
+          for (const request of offlineRequests) {
+            try {
+              const response = await fetch(request.url, {
+                method: request.method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  ...request.body,
+                  updated_at: this.formatMySQLDateTime(request.body.updated_at),
+                }),
+                credentials: "include",
+              });
+              if (response.ok) {
+                await deleteFromIndexedDB("offlineRequests", request.timestamp);
+                UI.showSaved();
+              } else {
+                const result = await response.json();
+                if (result.error === "User not authenticated") {
+                  UI.showError("Session expired. Please log in again.");
+                  window.location.href = "login.php";
+                }
+              }
+            } catch (error) {
+              console.error("Failed to sync offline request:", error);
+            }
+          }
+          UI.hideSyncProgress();
+        } catch (error) {
+          console.error("Error syncing offline requests:", error);
+          UI.showError("Failed to sync offline changes: " + error.message);
+          UI.hideSyncProgress();
+        }
+      } else {
+        console.warn(
+          "IndexedDB functions not available, skipping offline request sync."
+        );
+        UI.hideSyncProgress();
+      }
     } catch (error) {
       console.error("Unexpected error in processQueue:", error);
-      UI.showError("Unexpected error during autosave. Please try again.");
+      UI.showError("Unexpected error during autosave: " + error.message);
+      UI.hideSyncProgress();
     } finally {
       this.isProcessing = false;
       if (this.queue.length && !this.retryTimeout) {
@@ -425,6 +594,7 @@ const AutoSave = {
           retries: item.retries,
           nextRetry: item.nextRetry,
           locked: item.locked,
+          tempId: item.tempId,
         }))
       )
     );
@@ -436,11 +606,17 @@ const AutoSave = {
     if (saved) {
       this.queue = JSON.parse(saved).map((item) => ({
         noteId: item.noteId,
-        data: item.data,
-        images: [], // Images are not stored in LocalStorage
+        data: {
+          ...item.data,
+          updated_at: this.formatMySQLDateTime(item.data.updated_at),
+        },
+        images: [],
         retries: item.retries,
         nextRetry: item.nextRetry,
         locked: item.locked,
+        tempId:
+          item.tempId ||
+          `offline-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       }));
       console.log("Loaded queue from LocalStorage:", this.queue);
     }
@@ -451,7 +627,6 @@ const AutoSave = {
   },
 };
 
-// Debounce utility to prevent excessive flush calls
 function debounce(func, wait) {
   let timeout;
   return function (...args) {

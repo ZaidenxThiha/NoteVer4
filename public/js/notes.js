@@ -1,4 +1,3 @@
-// Define htmlspecialchars globally to ensure availability
 function htmlspecialchars(str) {
   if (typeof str !== "string") return "";
   return str
@@ -9,10 +8,10 @@ function htmlspecialchars(str) {
     .replace(/'/g, "&#039;");
 }
 
-// Define nl2br globally, using htmlspecialchars
 function nl2br(str) {
   return htmlspecialchars(str).replace(/(?:\r\n|\r|\n)/g, "<br>");
 }
+
 let selectedLabel = "";
 let isTrashView = false;
 
@@ -78,74 +77,83 @@ function showInlineForm() {
   document.getElementById("inlineTitle").focus();
 }
 
-function editNote(id) {
+async function editNote(id) {
   console.log(`Editing note with ID: ${id}`);
-  API.loadNote(id)
-    .then((note) => {
-      if (note && note.success) {
-        if (
-          !note.is_owner &&
-          (!note.shared_permissions ||
-            !note.shared_permissions.includes("edit"))
-        ) {
-          if (typeof UI !== "undefined") {
-            UI.showError("You do not have permission to edit this note");
-          } else {
-            alert("You do not have permission to edit this note");
-          }
-          return;
-        }
-        document.getElementById("inlineTitle").value = note.title || "";
-        document.getElementById("inlineContent").value = note.content || "";
-        document.getElementById("inlineLabels").value = note.labels || "";
-        document.getElementById("modalTitle").value = note.title || "";
-        document.getElementById("modalContent").value = note.content || "";
-        document.getElementById("modalLabels").value = note.labels || "";
-        window.currentNoteId = id;
-        document.getElementById("inlineShareButton").style.display =
-          note.is_owner ? "inline-block" : "none";
-        document.getElementById("modalShareButton").style.display =
-          note.is_owner ? "inline-block" : "none";
-        if (note.is_owner) {
-          updateShareSettings(
-            note.shared_emails,
-            note.shared_permissions,
-            note.shared_user_ids
-          );
-        }
-        window.history.replaceState(
-          {},
-          "",
-          `notes_frontend.php?action=edit&id=${id}`
-        );
-        showInlineForm();
-      } else {
-        if (typeof UI !== "undefined") {
-          UI.showError(note.error || "Failed to load note");
-        } else {
-          console.error(
-            "Failed to load note: " + (note.error || "Unknown error")
-          );
-          alert("Failed to load note: " + (note.error || "Unknown error"));
-        }
-      }
-    })
-    .catch((error) => {
+  try {
+    const note = await API.loadNote(id);
+    if (note && note.success) {
       if (
-        error.message.includes("403") &&
-        error.cause &&
-        error.cause.is_locked
+        !note.is_owner &&
+        (!note.shared_permissions || !note.shared_permissions.includes("edit"))
       ) {
-        promptPassword(id, "edit", () => editNote(id));
-      } else {
-        if (typeof UI !== "undefined") {
-          UI.showError("Network error during note loading: " + error.message);
-        } else {
-          console.error("Network error during note loading: " + error.message);
-          alert("Network error during note loading: " + error.message);
-        }
+        UI.showError("You do not have permission to edit this note");
+        return;
       }
-    });
+      document.getElementById("inlineTitle").value = note.title || "";
+      document.getElementById("inlineContent").value = note.content || "";
+      document.getElementById("inlineLabels").value = note.labels || "";
+      document.getElementById("modalTitle").value = note.title || "";
+      document.getElementById("modalContent").value = note.content || "";
+      document.getElementById("modalLabels").value = note.labels || "";
+      window.currentNoteId = id;
+      document.getElementById("inlineShareButton").style.display = note.is_owner
+        ? "inline-block"
+        : "none";
+      document.getElementById("modalShareButton").style.display = note.is_owner
+        ? "inline-block"
+        : "none";
+      if (note.is_owner) {
+        updateShareSettings(
+          note.shared_emails,
+          note.shared_permissions,
+          note.shared_user_ids
+        );
+      }
+      window.history.replaceState(
+        {},
+        "",
+        `notes_frontend.php?action=edit&id=${id}`
+      );
+      showInlineForm();
+    } else {
+      UI.showError(note.error || "Failed to load note");
+    }
+  } catch (error) {
+    if (error.message.includes("403") && error.cause && error.cause.is_locked) {
+      promptPassword(id, "edit", () => editNote(id));
+    } else if (!navigator.onLine && typeof getFromIndexedDB === "function") {
+      try {
+        const offlineNotes = await getFromIndexedDB("notes");
+        const note = offlineNotes.find((n) => n.id === id);
+        if (note) {
+          document.getElementById("inlineTitle").value = note.title || "";
+          document.getElementById("inlineContent").value = note.content || "";
+          document.getElementById("inlineLabels").value = note.labels || "";
+          document.getElementById("modalTitle").value = note.title || "";
+          document.getElementById("modalContent").value = note.content || "";
+          document.getElementById("modalLabels").value = note.labels || "";
+          window.currentNoteId = id;
+          window.history.replaceState(
+            {},
+            "",
+            `notes_frontend.php?action=edit&id=${id}`
+          );
+          showInlineForm();
+          UI.showError(
+            "Offline: Editing locally. Changes will sync when online."
+          );
+        } else {
+          UI.showError("Offline: Note not available locally.");
+        }
+      } catch (offlineError) {
+        UI.showError(
+          "Offline error during note loading: " + offlineError.message
+        );
+      }
+    } else {
+      UI.showError("Network error during note loading: " + error.message);
+    }
+  }
 }
 
 function saveNoteFromModal() {
@@ -163,8 +171,6 @@ function saveNoteFromModal() {
   loadNotes();
 }
 
-// Updated updateNoteUI to support note card edit mode
-// Updated updateNoteUI with htmlspecialchars
 function updateNoteUI(noteId, noteData, isAccessible, isLocked) {
   const noteElement = document.querySelector(`.note-card[data-id="${noteId}"]`);
   if (!noteElement) {
@@ -233,6 +239,9 @@ function updateNoteUI(noteId, noteData, isAccessible, isLocked) {
         noteData.shared_emails.join(", ")
       )}</span></div>`;
     }
+    if (noteData.is_offline) {
+      html += `<div class="offline-indicator"><span>Offline Note (Sync Pending)</span></div>`;
+    }
   } else {
     html += `<p>Enter password to view content</p>`;
   }
@@ -266,13 +275,12 @@ function updateNoteUI(noteId, noteData, isAccessible, isLocked) {
   noteElement.innerHTML = html;
 }
 
-// Updated nl2br with htmlspecialchars
-function nl2br(str) {
-  return htmlspecialchars(str).replace(/(?:\r\n|\r|\n)/g, "<br>");
-}
-
 function openImageModal(noteId) {
   console.log(`Opening image upload modal for note ID: ${noteId}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Image uploads are not supported in offline mode.");
+    return;
+  }
   window.currentNoteId = noteId;
   const modal = new bootstrap.Modal(
     document.getElementById("imageUploadModal")
@@ -306,10 +314,9 @@ function openImageModal(noteId) {
       UI.showError("No images selected");
       return;
     }
-    // For simplicity, handle one file at a time
-    const file = files[0]; // Take the first file
+    const file = files[0];
     const formData = new FormData();
-    formData.append("image", file); // Use 'image' instead of 'image[]'
+    formData.append("image", file);
     formData.append("note_id", noteId);
     API.uploadImage(formData)
       .then((data) => {
@@ -328,6 +335,10 @@ function openImageModal(noteId) {
 
 function openShareModal(noteId) {
   console.log(`Opening share modal for note ID: ${noteId}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Note sharing is not supported in offline mode.");
+    return;
+  }
   API.loadNote(noteId)
     .then((note) => {
       if (note && note.success) {
@@ -478,6 +489,10 @@ function openImageViewer(imageUrl) {
 
 function openNoteLabelsModal(noteId) {
   console.log(`Opening note labels modal for note ID: ${noteId}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Managing labels is not supported in offline mode.");
+    return;
+  }
   window.currentNoteId = noteId;
   API.loadNote(noteId).then((note) => {
     if (note && note.success) {
@@ -542,7 +557,7 @@ function saveNoteLabels() {
     });
 }
 
-function loadNotes(
+async function loadNotes(
   search = "",
   label = selectedLabel,
   isTrashed = isTrashView ? 1 : 0
@@ -550,29 +565,86 @@ function loadNotes(
   console.log(
     `Loading notes with search: '${search}', label: '${label}', trash: ${isTrashed}`
   );
-  API.loadNotes(search, label, isTrashed)
-    .then((html) => {
-      const container = document.getElementById("notesGrid");
-      container.innerHTML = `
-        <div class="note-card create-note-card" onclick="showInlineForm()" style="${
-          isTrashView ? "display: none;" : ""
-        }">
-          <div class="plus-icon">+</div>
-          <p>Create New Note</p>
-        </div>
-      `;
-      container.insertAdjacentHTML("beforeend", html);
-      console.log("Notes loaded successfully via AJAX");
-      attachSidebarEventListeners();
-    })
-    .catch((error) => {
+  let html = "";
+  if (!navigator.onLine && typeof getFromIndexedDB === "function") {
+    try {
+      const offlineNotes = await getFromIndexedDB("notes");
+      html = offlineNotes
+        .filter((note) => {
+          if (isTrashed) return false; // No trash view offline
+          if (
+            search &&
+            !(
+              note.title?.toLowerCase().includes(search.toLowerCase()) ||
+              note.content?.toLowerCase().includes(search.toLowerCase()) ||
+              note.labels?.toLowerCase().includes(search.toLowerCase())
+            )
+          )
+            return false;
+          if (label && !note.labels?.includes(label)) return false;
+          return true;
+        })
+        .map(
+          (note) => `
+          <div class="note-card existing-note-card" data-id="${note.id}">
+            <div class="note-title-container">
+              <h6>${htmlspecialchars(note.title || "Untitled")}</h6>
+              ${
+                note.labels
+                  ? `<div class="note-labels">${note.labels
+                      .split(",")
+                      .map(
+                        (l) =>
+                          `<span class="note-label-tag">${htmlspecialchars(
+                            l
+                          )}</span>`
+                      )
+                      .join("")}</div>`
+                  : ""
+              }
+              <p>${nl2br(htmlspecialchars(note.content))}</p>
+              <div class="offline-indicator"><span>Offline Note (Sync Pending)</span></div>
+            </div>
+            <small>Last updated: ${note.updated_at}</small>
+          </div>
+        `
+        )
+        .join("");
+      if (!html) {
+        html = '<div class="no-results"><p>No notes found.</p></div>';
+      }
+    } catch (error) {
+      UI.showError("Offline error loading notes: " + error.message);
+    }
+  } else {
+    try {
+      html = await API.loadNotes(search, label, isTrashed);
+    } catch (error) {
       UI.showError("Failed to load notes: " + error.message);
       console.error("Load notes error:", error);
-    });
+      return;
+    }
+  }
+  const container = document.getElementById("notesGrid");
+  container.innerHTML = `
+    <div class="note-card create-note-card" onclick="showInlineForm()" style="${
+      isTrashView ? "display: none;" : ""
+    }">
+      <div class="plus-icon">+</div>
+      <p>Create New Note</p>
+    </div>
+  `;
+  container.insertAdjacentHTML("beforeend", html);
+  console.log("Notes loaded successfully via AJAX");
+  attachSidebarEventListeners();
 }
 
 function deleteNote(id) {
   console.log(`Deleting note ID: ${id}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Note deletion is not supported in offline mode.");
+    return;
+  }
   API.loadNote(id)
     .then((note) => {
       if (note && note.success) {
@@ -624,6 +696,12 @@ function deleteNote(id) {
 
 function trashNote(id) {
   console.log(`Trashing note ID: ${id}`);
+  if (!navigator.onLine) {
+    UI.showError(
+      "Offline: Moving notes to trash is not supported in offline mode."
+    );
+    return;
+  }
   API.loadNote(id)
     .then((note) => {
       if (note && note.success) {
@@ -675,6 +753,10 @@ function trashNote(id) {
 
 function restoreNote(id) {
   console.log(`Restoring note ID: ${id}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Restoring notes is not supported in offline mode.");
+    return;
+  }
   API.loadNote(id)
     .then((note) => {
       if (note && note.success) {
@@ -728,6 +810,10 @@ function restoreNote(id) {
 
 function pinNote(id, pin) {
   console.log(`Pinning/unpinning note ID: ${id}, pin: ${pin}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Pinning notes is not supported in offline mode.");
+    return;
+  }
   API.loadNote(id)
     .then((note) => {
       if (note && note.success) {
@@ -790,6 +876,10 @@ function selectLabel(label) {
 
 function addLabel() {
   console.log("Adding new label");
+  if (!navigator.onLine) {
+    UI.showError("Offline: Adding labels is not supported in offline mode.");
+    return;
+  }
   const labelName = document.getElementById("newLabelInput").value.trim();
   if (!labelName) {
     UI.showError("Label name required");
@@ -811,6 +901,10 @@ function addLabel() {
 
 function openRenameLabelModal(oldName) {
   console.log(`Opening rename label modal for: ${oldName}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Renaming labels is not supported in offline mode.");
+    return;
+  }
   document.getElementById("renameLabelOld").value = oldName;
   document.getElementById("renameLabelNew").value = oldName;
   const modal = new bootstrap.Modal(
@@ -853,6 +947,10 @@ function renameLabel() {
 
 function deleteLabel(labelName) {
   console.log(`Deleting label: ${labelName}`);
+  if (!navigator.onLine) {
+    UI.showError("Offline: Deleting labels is not supported in offline mode.");
+    return;
+  }
   if (confirm(`Delete label "${labelName}"?`)) {
     API.deleteLabel(labelName)
       .then((data) => {
@@ -876,6 +974,12 @@ function openPasswordModal(noteId, action) {
   console.log(
     `Opening password modal for note ID: ${noteId}, action: ${action}`
   );
+  if (!navigator.onLine) {
+    UI.showError(
+      "Offline: Password management is not supported in offline mode."
+    );
+    return;
+  }
   UI.showPasswordPrompt(noteId, action, (password) => {
     API.setPassword(noteId, password)
       .then((data) => {
@@ -916,6 +1020,12 @@ function openPasswordModal(noteId, action) {
 
 function removePassword(noteId) {
   console.log(`Removing password for note ID: ${noteId}`);
+  if (!navigator.onLine) {
+    UI.showError(
+      "Offline: Password management is not supported in offline mode."
+    );
+    return;
+  }
   if (confirm("Remove password protection for this note?")) {
     API.removePassword(noteId)
       .then((data) => {
@@ -956,6 +1066,12 @@ function removePassword(noteId) {
 
 function relockNote(noteId) {
   console.log(`Relocking note ID: ${noteId}`);
+  if (!navigator.onLine) {
+    UI.showError(
+      "Offline: Password management is not supported in offline mode."
+    );
+    return;
+  }
   if (
     confirm(
       "Relock this note? You will need to enter the password again to view it."
@@ -999,6 +1115,13 @@ function promptPassword(
   cancelCallback = () => {}
 ) {
   console.log(`Prompting password for note ID: ${noteId}, action: ${action}`);
+  if (!navigator.onLine) {
+    UI.showError(
+      "Offline: Unlocking notes is not supported in offline mode. Please try again when online."
+    );
+    cancelCallback();
+    return;
+  }
   if (typeof successCallback !== "function") {
     console.warn(
       "Invalid success callback provided to promptPassword, using default no-op"
@@ -1046,7 +1169,7 @@ function promptPassword(
               }
             });
           } else {
-            UI.showError(data.error || "Failed to verify password");
+            UI.showError(data.error || "Incorrect password");
           }
         })
         .catch((error) => {
@@ -1055,12 +1178,21 @@ function promptPassword(
           );
         });
     },
-    cancelCallback
+    () => {
+      cancelCallback();
+      UI.showError(
+        "Password prompt canceled. Please unlock the note to proceed."
+      );
+    }
   );
 }
 
 function loadLabels() {
   console.log("Loading labels");
+  if (!navigator.onLine) {
+    UI.showError("Offline: Loading labels is not supported in offline mode.");
+    return;
+  }
   fetch("notes_backend.php?action=labels")
     .then((response) => response.json())
     .then((data) => {
@@ -1099,23 +1231,11 @@ function loadLabels() {
           labelsList.appendChild(div);
         });
       } else {
-        if (typeof UI !== "undefined") {
-          UI.showError(data.error || "Failed to load labels");
-        } else {
-          console.error(
-            "Failed to load labels: " + (data.error || "Unknown error")
-          );
-          alert("Failed to load labels: " + (data.error || "Unknown error"));
-        }
+        UI.showError(data.error || "Failed to load labels");
       }
     })
     .catch((error) => {
-      if (typeof UI !== "undefined") {
-        UI.showError("Network error during label loading: " + error.message);
-      } else {
-        console.error("Network error during label loading: " + error.message);
-        alert("Network error during label loading: " + error.message);
-      }
+      UI.showError("Network error during label loading: " + error.message);
     });
 }
 
@@ -1130,6 +1250,7 @@ function toggleSidebar() {
     sidebar.classList.contains("expanded") ? "true" : "false"
   );
 }
+
 function toggleDropdown(event, dropdownId) {
   event.preventDefault();
   const dropdown = document.getElementById(dropdownId);
@@ -1142,6 +1263,10 @@ function toggleDropdown(event, dropdownId) {
 
 function goToTrashView() {
   console.log("Navigating to trash view");
+  if (!navigator.onLine) {
+    UI.showError("Offline: Trash view is not supported in offline mode.");
+    return;
+  }
   isTrashView = true;
   selectedLabel = "";
   document.getElementById("notesBtn").classList.remove("active");
@@ -1166,12 +1291,11 @@ function goToHomepage() {
   loadNotes();
 }
 
-// Updated goToSavedView to prevent editing
 function goToSavedView() {
   console.log("Navigating to saved view");
   isTrashView = false;
   selectedLabel = "";
-  window.currentNoteId = null; // Reset currentNoteId to prevent editing
+  window.currentNoteId = null;
   document.getElementById("notesBtn").classList.remove("active");
   document.getElementById("labelsBtn").classList.remove("active");
   document.getElementById("trashBtn").classList.remove("active");
@@ -1181,13 +1305,11 @@ function goToSavedView() {
   document.querySelector(".header-bar h5").textContent = "Saved Notes";
   document.getElementById("labelFiltersList").style.display = "none";
   document.getElementById("searchInput").value = "";
-  document.getElementById("note-form-container").style.display = "none"; // Hide form to prevent editing
+  document.getElementById("note-form-container").style.display = "none";
   window.history.replaceState({}, "", "notes_frontend.php");
-  loadNotes("", "", 0); // Load non-trashed notes
+  loadNotes("", "", 0);
 }
 
-// Updated attachSidebarEventListeners to stop propagation
-// Updated attachSidebarEventListeners to stop propagation
 function attachSidebarEventListeners() {
   const sidebarToggle = document.getElementById("sidebarToggle");
   const sidebarToggleMobile = document.getElementById("sidebarToggleMobile");
@@ -1312,13 +1434,12 @@ document.addEventListener("DOMContentLoaded", () => {
         "Application error: UI components not loaded. Limited functionality available.";
       document.body.prepend(errorDiv);
       if (toggleViewBtn) {
-        toggleViewBtn.style.display = "none"; // Hide view toggle button if UI is unavailable
+        toggleViewBtn.style.display = "none";
       }
     } else {
       UI.initViewToggle();
     }
 
-    // Initialize core features
     attachSidebarEventListeners();
 
     if (createNoteModal) {
@@ -1407,8 +1528,8 @@ document.addEventListener("DOMContentLoaded", () => {
         !formContainer.contains(e.target) &&
         !e.target.closest(".create-note-card") &&
         !e.target.closest(".existing-note-card") &&
-        !e.target.closest(".modal") && // Exclude clicks within modals
-        !e.target.closest(".modal-backdrop") // Exclude modal backdrop clicks
+        !e.target.closest(".modal") &&
+        !e.target.closest(".modal-backdrop")
       ) {
         console.log("Click outside note form, triggering autosave");
         AutoSave.flush();
@@ -1430,7 +1551,6 @@ document.addEventListener("DOMContentLoaded", () => {
       API.loadNote(window.currentNoteId)
         .then((note) => {
           if (note && note.success) {
-            // Check if user has edit permission before entering edit mode
             if (
               note.is_owner ||
               (note.shared_permissions &&
@@ -1438,24 +1558,13 @@ document.addEventListener("DOMContentLoaded", () => {
             ) {
               editNote(window.currentNoteId);
             } else {
-              if (typeof UI !== "undefined") {
-                UI.showError("You do not have permission to edit this note");
-              } else {
-                alert("You do not have permission to edit this note");
-              }
+              UI.showError("You do not have permission to edit this note");
               window.currentNoteId = null;
               window.history.replaceState({}, "", "notes_frontend.php");
               loadNotes();
             }
           } else {
-            if (typeof UI !== "undefined") {
-              UI.showError(note.error || "Failed to load note");
-            } else {
-              console.error(
-                "Failed to load note: " + (note.error || "Unknown error")
-              );
-              alert("Failed to load note: " + (note.error || "Unknown error"));
-            }
+            UI.showError(note.error || "Failed to load note");
           }
         })
         .catch((error) => {
@@ -1474,32 +1583,14 @@ document.addEventListener("DOMContentLoaded", () => {
                   (item) => item.noteId !== window.currentNoteId
                 );
                 AutoSave.saveQueue();
-                if (typeof UI !== "undefined") {
-                  UI.showError(
-                    "Note is locked. Please unlock it to edit or save changes."
-                  );
-                } else {
-                  console.error(
-                    "Note is locked. Please unlock it to edit or save changes."
-                  );
-                  alert(
-                    "Note is locked. Please unlock it to edit or save changes."
-                  );
-                }
+                UI.showError(
+                  "Note is locked. Please unlock it to edit or save changes."
+                );
                 window.history.replaceState({}, "", "notes_frontend.php");
               }
             );
           } else {
-            if (typeof UI !== "undefined") {
-              UI.showError(
-                "Network error during note loading: " + error.message
-              );
-            } else {
-              console.error(
-                "Network error during note loading: " + error.message
-              );
-              alert("Network error during note loading: " + error.message);
-            }
+            UI.showError("Network error during note loading: " + error.message);
           }
         });
     }
@@ -1516,7 +1607,6 @@ document.addEventListener("DOMContentLoaded", () => {
     goToHomepage();
     loadLabels();
 
-    // Add click handler for note cards
     document.getElementById("notesGrid").addEventListener("click", (e) => {
       const noteCard = e.target.closest(".existing-note-card");
       if (!noteCard) return;
@@ -1526,44 +1616,17 @@ document.addEventListener("DOMContentLoaded", () => {
         ".pin-btn, .delete-btn, .image-btn, .label-btn, .settings-button, .dropdown-content, .restore-btn"
       );
       if (isButton) {
-        e.stopPropagation(); // Prevent button clicks from triggering edit
+        e.stopPropagation();
         return;
       }
 
       if (!isTrashView) {
         console.log(`Note card clicked, entering edit mode for ID: ${noteId}`);
-        API.loadNote(noteId).then((note) => {
-          if (note && note.success) {
-            if (
-              note.is_owner ||
-              (note.shared_permissions &&
-                note.shared_permissions.includes("edit"))
-            ) {
-              editNote(noteId);
-            } else {
-              if (typeof UI !== "undefined") {
-                UI.showError("You do not have permission to edit this note");
-              } else {
-                alert("You do not have permission to edit this note");
-              }
-            }
-          }
-        });
+        editNote(noteId);
       }
     });
   } else {
-    if (typeof UI !== "undefined") {
-      UI.showError("Form initialization error: Missing form elements");
-    } else {
-      console.error(
-        "Form initialization error: Missing form elements and UI object"
-      );
-      const errorDiv = document.createElement("div");
-      errorDiv.className = "error";
-      errorDiv.textContent =
-        "Application error: Missing required elements. Please refresh the page.";
-      document.body.prepend(errorDiv);
-    }
+    UI.showError("Form initialization error: Missing form elements");
     console.error("Missing elements:", {
       inlineTitle,
       inlineContent,
@@ -1581,25 +1644,6 @@ document.addEventListener("DOMContentLoaded", () => {
       toggleViewBtn,
     });
   }
-
-  document.getElementById("notesGrid").addEventListener("click", (e) => {
-    const noteCard = e.target.closest(".existing-note-card");
-    if (!noteCard) return;
-
-    const noteId = noteCard.dataset.id;
-    const isButton = e.target.closest(
-      ".pin-btn, .delete-btn, .image-btn, .label-btn, .settings-button, .dropdown-content, .restore-btn"
-    );
-    if (isButton) {
-      e.stopPropagation(); // Prevent button clicks from triggering edit
-      return;
-    }
-
-    if (!isTrashView) {
-      console.log(`Note card clicked, entering edit mode for ID: ${noteId}`);
-      editNote(noteId);
-    }
-  });
 });
 
 document.addEventListener("click", (event) => {

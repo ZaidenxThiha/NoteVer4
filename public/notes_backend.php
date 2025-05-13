@@ -1,937 +1,289 @@
 <?php
-// Disable all error display
-ini_set('display_errors', 0);
-ini_set('display_startup_errors', 0);
-error_reporting(E_ALL);
-ini_set('log_errors', 0);
-
-// Start output buffering
+// Start output buffering to prevent premature output
 ob_start();
 
+session_start();
+require_once 'config.php';
+require_once 'utils.php';
+
+header('Content-Type: application/json');
+
+function sendResponse($success, $data = [], $error = null) {
+    // Ensure no output before JSON
+    ob_end_clean();
+    echo json_encode(array_merge(['success' => $success], $data, $error ? ['error' => $error] : []));
+    exit;
+}
+
+function custom_htmlspecialchars($string) {
+    return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+}
+
+function custom_nl2br($string) {
+    return nl2br(custom_htmlspecialchars($string));
+}
+
+// Check authentication
+if (empty($_SESSION['user_id'])) {
+    error_log("No user_id in session for request to {$_SERVER['REQUEST_URI']}");
+    sendResponse(false, [], 'User not authenticated');
+}
+
+$userId = $_SESSION['user_id'];
+
+// Validate database schema
 try {
-    session_start();
-
-    require_once 'config.php';
-    header('Content-Type: application/json');
-
-    // Check if user is authenticated
-    if (empty($_SESSION['user_id'])) {
-        http_response_code(401);
-        echo json_encode(['success' => false]);
-        ob_end_flush();
-        exit();
-    }
-
-    $userId = $_SESSION['user_id'];
-
-    // Initialize session array for verified passwords
-    if (!isset($_SESSION['verified_notes'])) {
-        $_SESSION['verified_notes'] = [];
-    }
-
-    // Fetch user details
-    try {
-        $stmt = $pdo->prepare("SELECT display_name, is_activated FROM users WHERE id = :user_id");
-        $stmt->execute(['user_id' => $userId]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        $username = $user ? htmlspecialchars($user['display_name']) : 'Unknown User';
-        $isActivated = $user && $user['is_activated'] ? 'Activated' : 'Not Activated';
-    } catch (PDOException $e) {
-        $username = 'Unknown User';
-        $isActivated = 'Error';
-    }
-
-    // Check if a note is accessible (owner or shared user)
-    function isNoteAccessible($pdo, $noteId, $userId) {
-        try {
-            $stmt = $pdo->prepare("
-                SELECT n.password_hash, n.user_id, ns.recipient_user_id 
-                FROM notes n 
-                LEFT JOIN note_shares ns ON n.id = ns.note_id AND ns.recipient_user_id = :user_id 
-                WHERE n.id = :note_id
-            ");
-            $stmt->execute(['note_id' => $noteId, 'user_id' => $userId]);
-            $note = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$note) {
-                return false; // Note doesn't exist
-            }
-            if ($note['user_id'] != $userId && !$note['recipient_user_id']) {
-                return false; // User is neither owner nor shared recipient
-            }
-            if ($note['password_hash'] === null) {
-                return true; // No password protection
-            }
-            return isset($_SESSION['verified_notes'][$noteId]) && $_SESSION['verified_notes'][$noteId] === true;
-        } catch (PDOException $e) {
-            return false;
+    $stmt = $pdo->query("DESCRIBE notes");
+    $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    $requiredColumns = ['id', 'user_id', 'title', 'content', 'is_pinned', 'password_hash', 'is_locked', 'is_trashed', 'created_at', 'updated_at'];
+    foreach ($requiredColumns as $col) {
+        if (!in_array($col, $columns)) {
+            error_log("Missing column in notes table: $col");
+            sendResponse(false, [], "Database schema error: Missing column $col");
         }
     }
+    $pdo->query("DESCRIBE labels");
+    $pdo->query("DESCRIBE note_labels");
+    $pdo->query("DESCRIBE note_shares");
+    $pdo->query("DESCRIBE users");
+    $pdo->query("DESCRIBE note_images");
+} catch (PDOException $e) {
+    error_log("Schema validation error: " . $e->getMessage() . " in " . $e->getFile() . " on line " . $e->getLine());
+    sendResponse(false, [], 'Database schema validation failed: ' . $e->getMessage());
+}
 
-    // Handle image upload
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['image'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
+// Handle actions
+$action = $_GET['action'] ?? '';
+$save = isset($_GET['save']) ? (int)$_GET['save'] : 0;
+$noteId = isset($_GET['id']) ? (int)$_GET['id'] : null;
 
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
+try {
+    if ($save === 1 && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Save note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['title'], $data['content'], $data['labels'], $data['updated_at'])) {
+            error_log("Invalid note data for save: " . print_r($data, true));
+            sendResponse(false, [], 'Invalid note data');
         }
 
-        if (!isset($_FILES['image']) || empty($_FILES['image']['name']) || $_FILES['image']['error'] === UPLOAD_ERR_NO_FILE) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            // Check if note is accessible
-            if (!isNoteAccessible($pdo, $noteId, $userId)) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Check if user owns the note or has edit permission
-            $stmt = $pdo->prepare("SELECT n.id, n.user_id, ns.permission FROM notes n LEFT JOIN note_shares ns ON n.id = ns.note_id AND ns.recipient_user_id = :user_id WHERE n.id = :note_id");
-            $stmt->execute(['note_id' => $noteId, 'user_id' => $userId]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$result || ($result['user_id'] != $userId && $result['permission'] != 'edit')) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Use absolute path
-            $uploadDir = '/var/www/html/public/uploads/';
-
-            // Create directory if it doesn't exist
-            if (!is_dir($uploadDir)) {
-                if (!mkdir($uploadDir, 0775, true)) {
-                    http_response_code(500);
-                    echo json_encode(['success' => false]);
-                    ob_end_flush();
-                    exit();
-                }
-                chown($uploadDir, 'www-data');
-                chgrp($uploadDir, 'www-data');
-                chmod($uploadDir, 0775);
-            }
-
-            if (!is_writable($uploadDir)) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Validate and process the uploaded file
-            $file = $_FILES['image'];
-
-            if ($file['error'] !== UPLOAD_ERR_OK) {
-                http_response_code(400);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Validate file size
-            $maxFileSize = 5 * 1024 * 1024; // 5MB
-            if ($file['size'] > $maxFileSize) {
-                http_response_code(400);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Validate file type
-            if (!function_exists('finfo_open')) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            if (!$finfo) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $mimeType = finfo_file($finfo, $file['tmp_name']);
-            finfo_close($finfo);
-
-            $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-            if (!in_array($mimeType, $allowedTypes)) {
-                http_response_code(400);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Generate unique filename
-            $fileName = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '', basename($file['name']));
-            $filePath = $uploadDir . $fileName;
-            $relativePath = '/public/uploads/' . $fileName;
-
-            // Move uploaded file
-            if (!move_uploaded_file($file['tmp_name'], $filePath)) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Set file permissions
-            if (!chmod($filePath, 0644)) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            // Insert into database
-            $stmt = $pdo->prepare("INSERT INTO note_images (note_id, image_path) VALUES (:note_id, :image_path)");
-            $stmt->execute(['note_id' => $noteId, 'image_path' => $relativePath]);
-            echo json_encode(['success' => true, 'image_path' => $relativePath]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        } catch (Exception $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Load utils.php for actions requiring sendEmail
-    require_once 'utils.php';
-
-    // Send sharing email
-    function sendSharingEmail($pdo, $recipientEmail, $noteId, $noteTitle, $permission) {
-        $htmlBody = "A note titled '$noteTitle' has been shared with you (Permission: $permission). <a href='http://localhost/notes_frontend.php?action=edit&id=$noteId'>View Note</a>";
-        $textBody = "A note titled '$noteTitle' has been shared with you (Permission: $permission). View it at: http://localhost/notes_frontend.php?action=edit&id=$noteId";
-        $result = sendEmail($recipientEmail, '', 'Note Shared with You', $htmlBody, $textBody);
-        return $result['success'];
-    }
-
-    // Handle set password
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_password'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-        $password = trim($_POST['password'] ?? '');
-
-        if (!$noteId || empty($password)) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            // Verify user owns the note
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
+        // Verify permissions
+        if ($noteId) {
+            $stmt = $pdo->prepare(
+                "SELECT user_id, password_hash, is_locked FROM notes WHERE id = :id AND (user_id = :user_id OR id IN (SELECT note_id FROM note_shares WHERE recipient_user_id = :user_id AND permission = 'edit'))"
+            );
             $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $pdo->prepare("UPDATE notes SET password_hash = :password_hash WHERE id = :note_id");
-            $stmt->execute(['password_hash' => $passwordHash, 'note_id' => $noteId]);
-            $_SESSION['verified_notes'][$noteId] = true;
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle remove password
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_password'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            // Verify user owns the note
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("UPDATE notes SET password_hash = NULL WHERE id = :note_id");
-            $stmt->execute(['note_id' => $noteId]);
-            unset($_SESSION['verified_notes'][$noteId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle verify password
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['verify_password'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-        $password = trim($_POST['password'] ?? '');
-
-        if (!$noteId || empty($password)) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT password_hash FROM notes WHERE id = :note_id");
-            $stmt->execute(['note_id' => $noteId]);
             $note = $stmt->fetch(PDO::FETCH_ASSOC);
+
             if (!$note) {
-                http_response_code(404);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
+                error_log("Note $noteId not found or user $userId lacks edit permissions");
+                sendResponse(false, [], 'Note not found or you lack edit permissions');
             }
-
-            if ($note['password_hash'] === null || password_verify($password, $note['password_hash'])) {
-                $_SESSION['verified_notes'][$noteId] = true;
-                echo json_encode(['success' => true]);
-            } else {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
+            if ($note['password_hash'] && $note['is_locked']) {
+                error_log("Note $noteId is password-protected for user $userId");
+                sendResponse(false, ['is_locked' => true], 'Note is password-protected');
             }
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle relock
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['relock'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
         }
 
-        try {
-            $stmt = $pdo->prepare("SELECT password_hash FROM notes WHERE id = :note_id AND user_id = :user_id");
-            $stmt->execute(['note_id' => $noteId, 'user_id' => $userId]);
-            $note = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$note || $note['password_hash'] === null) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
+        // Save or update note
+        if ($noteId) {
+            $stmt = $pdo->prepare(
+                "UPDATE notes SET title = :title, content = :content, updated_at = :updated_at WHERE id = :id"
+            );
+            $stmt->execute([
+                'id' => $noteId,
+                'title' => $data['title'],
+                'content' => $data['content'],
+                'updated_at' => $data['updated_at']
+            ]);
 
-            unset($_SESSION['verified_notes'][$noteId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle save (autosave via JSON POST ?save=1&id=:id or /notes/:id)
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_GET['save']) && $_GET['save'] == 1 || preg_match('#^/notes/(\d+)$#', $_SERVER['REQUEST_URI'], $matches))) {
-        $noteId = isset($matches[1]) ? (int)$matches[1] : (filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT) ?: null);
-        $input = json_decode(file_get_contents('php://input'), true);
-        if (!$input) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-        $title = trim($input['title'] ?? '');
-        $content = trim($input['content'] ?? '');
-        $labelNames = isset($input['labels']) ? array_filter(array_map('trim', explode(',', $input['labels']))) : [];
-        $updatedAt = isset($input['updated_at']) ? trim($input['updated_at']) : date('c');
-
-        if (empty($content)) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $updatedAtDate = new DateTime($updatedAt);
-            $mysqlUpdatedAt = $updatedAtDate->format('Y-m-d H:i:s');
-        } catch (Exception $e) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $pdo->beginTransaction();
-
-            if ($noteId) {
-                if (!isNoteAccessible($pdo, $noteId, $userId)) {
-                    http_response_code(403);
-                    echo json_encode(['success' => false]);
-                    ob_end_flush();
-                    exit();
-                }
-
-                $stmt = $pdo->prepare("SELECT n.id, n.user_id, ns.permission FROM notes n LEFT JOIN note_shares ns ON n.id = ns.note_id AND ns.recipient_user_id = :user_id WHERE n.id = :note_id");
-                $stmt->execute(['note_id' => $noteId, 'user_id' => $userId]);
-                $result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$result || ($result['user_id'] != $userId && $result['permission'] != 'edit')) {
-                    http_response_code(403);
-                    echo json_encode(['success' => false]);
-                    ob_end_flush();
-                    exit();
-                }
-
-                $stmt = $pdo->prepare("UPDATE notes SET title = :title, content = :content, updated_at = :updated_at WHERE id = :id");
-                $stmt->execute(['title' => $title, 'content' => $content, 'updated_at' => $mysqlUpdatedAt, 'id' => $noteId]);
-            } else {
-                $stmt = $pdo->prepare("INSERT INTO notes (user_id, title, content, created_at, updated_at, is_trashed) VALUES (:user_id, :title, :content, NOW(), :updated_at, 0)");
-                $stmt->execute(['user_id' => $userId, 'title' => $title, 'content' => $content, 'updated_at' => $mysqlUpdatedAt]);
-                $noteId = $pdo->lastInsertId();
-            }
-
+            // Update labels
+            $labels = array_filter(array_map('trim', explode(',', $data['labels'])));
             $stmt = $pdo->prepare("DELETE FROM note_labels WHERE note_id = :note_id");
             $stmt->execute(['note_id' => $noteId]);
-            if (!empty($labelNames)) {
-                $labelIds = [];
-                foreach ($labelNames as $labelName) {
-                    if (!empty($labelName)) {
-                        $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
-                        $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
-                        $label = $stmt->fetch(PDO::FETCH_ASSOC);
-                        if ($label) {
-                            $labelIds[] = $label['id'];
-                        } else {
-                            $stmt = $pdo->prepare("INSERT INTO labels (user_id, name) VALUES (:user_id, :name)");
-                            $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
-                            $labelIds[] = $pdo->lastInsertId();
-                        }
-                    }
+
+            foreach ($labels as $labelName) {
+                if (empty($labelName)) continue;
+                $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+                $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+                $labelId = $stmt->fetchColumn();
+
+                if (!$labelId) {
+                    $stmt = $pdo->prepare("INSERT INTO labels (user_id, name) VALUES (:user_id, :name)");
+                    $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+                    $labelId = $pdo->lastInsertId();
                 }
-                if (!empty($labelIds)) {
-                    $placeholders = implode(',', array_fill(0, count($labelIds), '(?, ?)'));
-                    $values = [];
-                    foreach ($labelIds as $labelId) {
-                        $values[] = $noteId;
-                        $values[] = $labelId;
-                    }
-                    $stmt = $pdo->prepare("INSERT IGNORE INTO note_labels (note_id, label_id) VALUES $placeholders");
-                    $stmt->execute($values);
+
+                $stmt = $pdo->prepare("INSERT INTO note_labels (note_id, label_id) VALUES (:note_id, :label_id)");
+                $stmt->execute(['note_id' => $noteId, 'label_id' => $labelId]);
+            }
+
+            sendResponse(true, ['id' => $noteId]);
+        } else {
+            $stmt = $pdo->prepare(
+                "INSERT INTO notes (user_id, title, content, updated_at) VALUES (:user_id, :title, :content, :updated_at)"
+            );
+            $stmt->execute([
+                'user_id' => $userId,
+                'title' => $data['title'],
+                'content' => $data['content'],
+                'updated_at' => $data['updated_at']
+            ]);
+            $newId = $pdo->lastInsertId();
+
+            $labels = array_filter(array_map('trim', explode(',', $data['labels'])));
+            foreach ($labels as $labelName) {
+                if (empty($labelName)) continue;
+                $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+                $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+                $labelId = $stmt->fetchColumn();
+
+                if (!$labelId) {
+                    $stmt = $pdo->prepare("INSERT INTO labels (user_id, name) VALUES (:user_id, :name)");
+                    $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+                    $labelId = $pdo->lastInsertId();
                 }
+
+                $stmt = $pdo->prepare("INSERT INTO note_labels (note_id, label_id) VALUES (:note_id, :label_id)");
+                $stmt->execute(['note_id' => $newId, 'label_id' => $labelId]);
             }
 
-            $pdo->commit();
-            echo json_encode(['id' => $noteId, 'success' => true, 'updated_at' => $mysqlUpdatedAt]);
-        } catch (PDOException $e) {
-            $pdo->rollBack();
-            http_response_code(500);
-            echo json_encode(['success' => false]);
+            sendResponse(true, ['id' => $newId]);
         }
-        ob_end_flush();
-        exit();
-    }
+    } elseif ($action === 'edit' && $noteId) {
+        // Load note
+        $stmt = $pdo->prepare(
+            "SELECT n.*, GROUP_CONCAT(u.email) AS shared_emails, GROUP_CONCAT(s.permission) AS shared_permissions, GROUP_CONCAT(s.recipient_user_id) AS shared_user_ids,
+                    GROUP_CONCAT(l.name) AS labels
+             FROM notes n
+             LEFT JOIN note_shares s ON n.id = s.note_id
+             LEFT JOIN users u ON s.recipient_user_id = u.id
+             LEFT JOIN note_labels nl ON n.id = nl.note_id
+             LEFT JOIN labels l ON nl.label_id = l.id
+             WHERE n.id = :id AND (n.user_id = :user_id OR n.id IN (SELECT note_id FROM note_shares WHERE recipient_user_id = :user_id))
+             GROUP BY n.id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        $note = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Handle rename label
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_label'])) {
-        $oldName = trim($_POST['old_name'] ?? '');
-        $newName = trim($_POST['new_name'] ?? '');
-        if (empty($oldName) || empty($newName)) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
+        if (!$note) {
+            error_log("Note $noteId not found or user $userId lacks access");
+            sendResponse(false, [], 'Note not found or you lack access');
+        }
+        if ($note['password_hash'] && $note['is_locked']) {
+            error_log("Note $noteId is password-protected for user $userId");
+            sendResponse(false, ['is_locked' => true], 'Note is password-protected');
         }
 
+        $note['is_owner'] = $note['user_id'] == $userId;
+        $note['shared_emails'] = $note['shared_emails'] ? explode(',', $note['shared_emails']) : [];
+        $note['shared_permissions'] = $note['shared_permissions'] ? explode(',', $note['shared_permissions']) : [];
+        $note['shared_user_ids'] = $note['shared_user_ids'] ? explode(',', $note['shared_user_ids']) : [];
+        $note['labels'] = $note['labels'] ? explode(',', $note['labels']) : [];
+        $note['images'] = [];
         try {
-            $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
-            $stmt->execute(['user_id' => $userId, 'name' => $oldName]);
-            $label = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$label) {
-                http_response_code(404);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
-            $stmt->execute(['user_id' => $userId, 'name' => $newName]);
-            if ($stmt->fetch()) {
-                http_response_code(400);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("UPDATE labels SET name = :new_name WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['new_name' => $newName, 'id' => $label['id'], 'user_id' => $userId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle delete label
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_label'])) {
-        $labelName = trim($_POST['label_name'] ?? '');
-        if (empty($labelName)) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
-            $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
-            $label = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$label) {
-                http_response_code(404);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $pdo->beginTransaction();
-            $stmt = $pdo->prepare("DELETE FROM note_labels WHERE label_id = :label_id");
-            $stmt->execute(['label_id' => $label['id']]);
-            $stmt = $pdo->prepare("DELETE FROM labels WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $label['id'], 'user_id' => $userId]);
-            $pdo->commit();
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            $pdo->rollBack();
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle pin/unpin
-    if (isset($_GET['pin']) && isset($_GET['id'])) {
-        $isPinned = filter_input(INPUT_GET, 'pin', FILTER_VALIDATE_INT) === 1 ? 1 : 0;
-        $noteId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
-        $pinnedAt = $isPinned ? date('Y-m-d H:i:s') : null;
-
-        if (!$noteId) {
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("UPDATE notes SET is_pinned = :pinned, pinned_at = :pinned_at WHERE id = :id AND user_id = :user_id");
-            $stmt->bindValue(':pinned', $isPinned, PDO::PARAM_INT);
-            $stmt->bindValue(':pinned_at', $pinnedAt, $pinnedAt === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
-            $stmt->bindValue(':id', $noteId, PDO::PARAM_INT);
-            $stmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle note sharing
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['share_note'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-        $emails = isset($_POST['emails']) ? array_filter(array_map('trim', explode(',', $_POST['emails']))) : [];
-        $permission = filter_input(INPUT_POST, 'permission', FILTER_SANITIZE_STRING);
-
-        if (!$noteId || empty($emails) || !in_array($permission, ['read', 'edit'])) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id, title FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            $note = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$note) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $successCount = 0;
-            $failedEmails = [];
-            foreach ($emails as $email) {
-                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                    $failedEmails[] = $email;
-                    continue;
-                }
-                $stmt = $pdo->prepare("SELECT id FROM users WHERE email = :email");
-                $stmt->execute(['email' => $email]);
-                $recipient = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($recipient) {
-                    $stmt = $pdo->prepare("INSERT IGNORE INTO note_shares (note_id, recipient_user_id, permission) VALUES (:note_id, :recipient_user_id, :permission)");
-                    $stmt->execute(['note_id' => $noteId, 'recipient_user_id' => $recipient['id'], 'permission' => $permission]);
-                    if ($stmt->rowCount()) {
-                        if (sendSharingEmail($pdo, $email, $noteId, $note['title'], $permission)) {
-                            $successCount++;
-                        } else {
-                            $failedEmails[] = $email;
-                        }
-                    }
-                } else {
-                    $failedEmails[] = $email;
-                }
-            }
-            $response = ['success' => true, 'message' => "Shared with $successCount user(s)"];
-            if (!empty($failedEmails)) {
-                $response['warning'] = "Failed to share with: " . implode(', ', $failedEmails);
-            }
-            echo json_encode($response);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle update sharing permissions
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_share'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-        $recipientUserId = filter_input(INPUT_POST, 'recipient_user_id', FILTER_VALIDATE_INT) ?: null;
-        $permission = filter_input(INPUT_POST, 'permission', FILTER_SANITIZE_STRING);
-
-        if (!$noteId || !$recipientUserId || !in_array($permission, ['read', 'edit'])) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("UPDATE note_shares SET permission = :permission WHERE note_id = :note_id AND recipient_user_id = :recipient_user_id");
-            $stmt->execute(['permission' => $permission, 'note_id' => $noteId, 'recipient_user_id' => $recipientUserId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle revoke sharing
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revoke_share'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-        $recipientUserId = filter_input(INPUT_POST, 'recipient_user_id', FILTER_VALIDATE_INT) ?: null;
-
-        if (!$noteId || !$recipientUserId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("DELETE FROM note_shares WHERE note_id = :note_id AND recipient_user_id = :recipient_user_id");
-            $stmt->execute(['note_id' => $noteId, 'recipient_user_id' => $recipientUserId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Handle trash note
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['trash_note'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("UPDATE notes SET is_trashed = 1 WHERE id = :note_id");
+            $stmt = $pdo->prepare("SELECT image_path FROM note_images WHERE note_id = :note_id");
             $stmt->execute(['note_id' => $noteId]);
-            echo json_encode(['success' => true]);
+            $note['images'] = $stmt->fetchAll(PDO::FETCH_COLUMN);
         } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
+            error_log("Failed to fetch images for note $noteId: " . $e->getMessage());
         }
-        ob_end_flush();
-        exit();
-    }
+        sendResponse(true, $note);
+    } elseif ($action === 'notes') {
+        // Load all notes
+        $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+        $label = isset($_GET['label']) ? trim($_GET['label']) : '';
+        $isTrashed = isset($_GET['is_trashed']) ? (int)$_GET['is_trashed'] : 0;
 
-    // Handle restore note
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore_note'])) {
-        $noteId = filter_input(INPUT_POST, 'note_id', FILTER_VALIDATE_INT) ?: null;
-
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("SELECT id FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            if (!$stmt->fetch()) {
-                http_response_code(403);
-                echo json_encode(['success' => false]);
-                ob_end_flush();
-                exit();
-            }
-
-            $stmt = $pdo->prepare("UPDATE notes SET is_trashed = 0 WHERE id = :note_id");
-            $stmt->execute(['note_id' => $noteId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Delete note
-    if (isset($_GET['delete']) && isset($_GET['id'])) {
-        $noteId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
-        if (!$noteId) {
-            http_response_code(400);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        if (!isNoteAccessible($pdo, $noteId, $userId)) {
-            http_response_code(403);
-            echo json_encode(['success' => false]);
-            ob_end_flush();
-            exit();
-        }
-
-        try {
-            $stmt = $pdo->prepare("DELETE FROM notes WHERE id = :id AND user_id = :user_id");
-            $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-            echo json_encode(['success' => true]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Return notes HTML for live reload via AJAX
-    if (isset($_GET['action']) && $_GET['action'] === 'list') {
-        $search = trim($_GET['search'] ?? '');
-        $labelFilter = trim($_GET['label'] ?? '');
-        $isTrashed = filter_input(INPUT_GET, 'is_trashed', FILTER_VALIDATE_INT, ['options' => ['default' => 0]]) ? 1 : 0;
-
-        $query = "
-            SELECT n.id, n.user_id, n.title, n.content, n.is_pinned, n.pinned_at, n.password_hash, n.updated_at, n.is_trashed,
-                   GROUP_CONCAT(ni.image_path) as image_paths, GROUP_CONCAT(l.name) as label_names,
-                   GROUP_CONCAT(DISTINCT ns.recipient_user_id) as shared_user_ids,
-                   GROUP_CONCAT(DISTINCT ns.permission) as shared_permissions,
-                   GROUP_CONCAT(DISTINCT u2.email) as shared_emails
-            FROM notes n
-            LEFT JOIN note_images ni ON n.id = ni.note_id
-            LEFT JOIN note_labels nl ON n.id = nl.note_id
-            LEFT JOIN labels l ON nl.label_id = l.id
-            LEFT JOIN note_shares ns ON n.id = ns.note_id
-            LEFT JOIN users u2 ON ns.recipient_user_id = u2.id
-            WHERE (n.user_id = :user_id OR ns.recipient_user_id = :user_id)
-            AND n.is_trashed = :is_trashed
-        ";
+        $query = "SELECT n.*, GROUP_CONCAT(u.email) AS shared_emails, GROUP_CONCAT(l.name) AS labels
+                  FROM notes n
+                  LEFT JOIN note_shares s ON n.id = s.note_id
+                  LEFT JOIN users u ON s.recipient_user_id = u.id
+                  LEFT JOIN note_labels nl ON n.id = nl.note_id
+                  LEFT JOIN labels l ON nl.label_id = l.id
+                  WHERE (n.user_id = :user_id OR n.id IN (SELECT note_id FROM note_shares WHERE recipient_user_id = :user_id))
+                  AND n.is_trashed = :is_trashed";
         $params = ['user_id' => $userId, 'is_trashed' => $isTrashed];
 
-        if (!empty($search)) {
-            $query .= " AND (n.title LIKE :search OR n.content LIKE :search OR l.name LIKE :search)";
+        if ($search) {
+            $query .= " AND (n.title LIKE :search OR n.content LIKE :search)";
             $params['search'] = "%$search%";
         }
-
-        if (!empty($labelFilter)) {
-            $query .= " AND n.id IN (
-                SELECT nl2.note_id 
-                FROM note_labels nl2 
-                JOIN labels l2 ON nl2.label_id = l2.id 
-                WHERE l2.name = :label AND l2.user_id = :user_id
-            )";
-            $params['label'] = $labelFilter;
+        if ($label) {
+            $query .= " AND EXISTS (SELECT 1 FROM note_labels nl2 JOIN labels l2 ON nl2.label_id = l2.id WHERE nl2.note_id = n.id AND l2.name = :label)";
+            $params['label'] = $label;
         }
 
-        $query .= " GROUP BY n.id ORDER BY n.is_pinned DESC, COALESCE(n.pinned_at, '1970-01-01') DESC, n.updated_at DESC";
-        try {
-            $stmt = $pdo->prepare($query);
-            $stmt->execute($params);
-            $notes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $query .= " GROUP BY n.id ORDER BY n.is_pinned DESC, n.updated_at DESC";
 
-            $html = '';
-            if (empty($notes) && $isTrashed) {
-                $html = '<div class="empty-trash-message"><p>Your trash is empty.</p></div>';
-            } elseif (empty($notes)) {
-                $html = '<div class="no-results"><p>No notes found.</p></div>';
-            }
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+        $notes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $html = '';
+        if (empty($notes)) {
+            $html = '<div class="no-results"><p>No notes found.</p></div>';
+        } else {
             foreach ($notes as $note) {
-                $isLocked = $note['password_hash'] !== null;
-                $isShared = !empty($note['shared_user_ids']);
-                $isAccessible = isNoteAccessible($pdo, $note['id'], $userId);
-                $isOwner = $note['user_id'] == $userId;
-                $html .= '<div class="note-card existing-note-card" data-id="' . $note['id'] . '">';
-                $html .= '<button class="pin-btn ' . ($note['is_pinned'] ? 'pinned' : '') . '" onclick="pinNote(' . $note['id'] . ', ' . ($note['is_pinned'] ? 0 : 1) . ')" aria-label="' . ($note['is_pinned'] ? 'Unpin' : 'Pin') . ' note"><i class="fas fa-thumbtack"></i></button>';
-                $html .= '<button class="delete-btn" onclick="' . ($isTrashed ? 'deleteNote' : 'trashNote') . '(' . $note['id'] . ')" aria-label="' . ($isTrashed ? 'Delete permanently' : 'Move to trash') . '"><i class="fas fa-trash"></i></button>';
+                $isAccessible = !$note['password_hash'] || !$note['is_locked'] || ($note['user_id'] == $userId);
+                $html .= '<div class="note-card existing-note-card ' . ($note['is_pinned'] ? 'pinned' : '') . ($isTrashed ? '' : ' cursor-pointer') . '" data-id="' . $note['id'] . '">';
+                $html .= '<button class="pin-btn ' . ($note['is_pinned'] ? 'pinned' : '') . '" onclick="pinNote(' . $note['id'] . ', ' . ($note['is_pinned'] ? 0 : 1) . '); event.stopPropagation();" aria-label="' . ($note['is_pinned'] ? 'Unpin' : 'Pin') . ' note">';
+                $html .= '<i class="fas fa-thumbtack"></i></button>';
+                $html .= '<button class="delete-btn" onclick="' . ($isTrashed ? 'deleteNote' : 'trashNote') . '(' . $note['id'] . '); event.stopPropagation();" aria-label="' . ($isTrashed ? 'Delete permanently' : 'Move to trash') . '">';
+                $html .= '<i class="fas fa-trash"></i></button>';
+
                 if ($isTrashed) {
-                    $html .= '<button class="restore-btn" onclick="restoreNote(' . $note['id'] . ')" aria-label="Restore note" title="Restore note"><i class="fas fa-undo"></i></button>';
+                    $html .= '<button class="restore-btn" onclick="restoreNote(' . $note['id'] . '); event.stopPropagation();" aria-label="Restore note" title="Restore note"><i class="fas fa-undo"></i></button>';
                 } else {
-                    $html .= '<button class="image-btn" onclick="openImageModal(' . $note['id'] . ')" aria-label="Add image" title="Add image"><i class="fas fa-image"></i></button>';
-                    $html .= '<button class="label-btn" onclick="openNoteLabelsModal(' . $note['id'] . ')" aria-label="Manage labels" title="Manage labels"><i class="fas fa-tag"></i></button>';
+                    $html .= '<button class="image-btn" onclick="openImageModal(' . $note['id'] . '); event.stopPropagation();" aria-label="Add image" title="Add image"><i class="fas fa-image"></i></button>';
+                    $html .= '<button class="label-btn" onclick="openNoteLabelsModal(' . $note['id'] . '); event.stopPropagation();" aria-label="Manage labels" title="Manage labels"><i class="fas fa-tag"></i></button>';
                 }
+
                 $html .= '<div class="note-title-container">';
-                $html .= '<h6 onclick="' . ($isTrashed ? '' : 'editNote(' . $note['id'] . ')') . '">' . htmlspecialchars($note['title'] ?: 'Untitled') . '</h6>';
-                if ($note['label_names'] && $isAccessible) {
-                    $html .= '<div class="note-labels">';
-                    foreach (explode(',', $note['label_names']) as $label) {
-                        $html .= '<span class="note-label-tag">' . htmlspecialchars($label) . '</span>';
-                    }
-                    $html .= '</div>';
-                }
+                $html .= '<h6>' . htmlspecialchars($note['title'] ?: 'Untitled') . '</h6>';
+
                 if ($isAccessible) {
-                    $html .= '<p>' . nl2br(htmlspecialchars($note['content'])) . '</p>';
-                    if (!empty($note['image_paths'])) {
+                    if ($note['labels']) {
+                        $html .= '<div class="note-labels">';
+                        foreach (explode(',', $note['labels']) as $lbl) {
+                            $html .= '<span class="note-label-tag">' . htmlspecialchars(trim($lbl)) . '</span>';
+                        }
+                        $html .= '</div>';
+                    }
+                    $html .= '<p>' . custom_nl2br($note['content'] ?: '') . '</p>';
+                    if ($note['shared_emails']) {
+                        $html .= '<div class="note-shared"><span>Shared with: ' . htmlspecialchars($note['shared_emails']) . '</span></div>';
+                    }
+                    // Add images
+                    $images = [];
+                    try {
+                        $stmt = $pdo->prepare("SELECT image_path FROM note_images WHERE note_id = :note_id");
+                        $stmt->execute(['note_id' => $note['id']]);
+                        $images = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                    } catch (PDOException $e) {
+                        error_log("Failed to fetch images for note {$note['id']}: " . $e->getMessage());
+                    }
+                    if ($images) {
                         $html .= '<div class="note-images">';
-                        foreach (explode(',', $note['image_paths']) as $image) {
+                        foreach ($images as $image) {
                             $html .= '<img src="' . htmlspecialchars($image) . '" class="note-image-thumb" onclick="openImageViewer(\'' . htmlspecialchars($image) . '\')" alt="Note image">';
                         }
                         $html .= '</div>';
                     }
-                    if (!empty($note['shared_emails'])) {
-                        $html .= '<div class="note-shared"><span>Shared with: ' . htmlspecialchars($note['shared_emails']) . '</span></div>';
-                    }
                 } else {
                     $html .= '<p>Enter password to view content</p>';
                 }
+
                 $html .= '</div>';
                 $html .= '<small>Last updated: ' . $note['updated_at'] . '</small>';
-                if ($isOwner && !$isTrashed) {
+
+                if ($note['user_id'] == $userId && !$isTrashed) {
                     $html .= '<div class="dropdown">';
-                    $html .= '<button class="btn settings-button" onclick="toggleDropdown(event, \'dropdown-' . $note['id'] . '\')" aria-label="Note settings"><i class="fas fa-cog"></i></button>';
+                    $html .= '<button class="btn settings-button" onclick="toggleDropdown(event, \'dropdown-' . $note['id'] . '\'); event.stopPropagation();" aria-label="Note settings">';
+                    $html .= '<i class="fas fa-cog"></i></button>';
                     $html .= '<div class="dropdown-content" id="dropdown-' . $note['id'] . '">';
                     $html .= '<a href="#" onclick="openShareModal(' . $note['id'] . '); return false;">📤 Share</a>';
                     if ($isAccessible) {
-                        if ($isLocked) {
+                        if ($note['password_hash'] && $note['is_locked']) {
                             $html .= '<a href="#" onclick="relockNote(' . $note['id'] . '); return false;">🔐 Relock</a>';
                             $html .= '<a href="#" onclick="openPasswordModal(' . $note['id'] . ', \'change\'); return false;">🔐 Change Password</a>';
                             $html .= '<a href="#" onclick="removePassword(' . $note['id'] . '); return false;">🔓 Remove Password</a>';
@@ -941,109 +293,465 @@ try {
                     } else {
                         $html .= '<a href="#" onclick="promptPassword(' . $note['id'] . ', \'access\'); return false;">🔓 Unlock</a>';
                     }
-                    $html .= '</div>';
-                    $html .= '</div>';
+                    $html .= '</div></div>';
                 } elseif (!$isAccessible) {
-                    $html .= '<button class="btn" onclick="promptPassword(' . $note['id'] . ', \'access\')" aria-label="Unlock note">🔓 Unlock</button>';
+                    $html .= '<button class="btn" onclick="promptPassword(' . $note['id'] . ', \'access\'); event.stopPropagation();" aria-label="Unlock note">🔓 Unlock</button>';
                 }
+
                 $html .= '</div>';
             }
-            echo json_encode(['success' => true, 'html' => $html]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
         }
-        ob_end_flush();
-        exit();
-    }
 
-    // Fetch labels for sidebar
-    if (isset($_GET['action']) && $_GET['action'] === 'labels') {
-        try {
-            $stmt = $pdo->prepare("SELECT DISTINCT name FROM labels WHERE user_id = :user_id ORDER BY name");
-            $stmt->execute(['user_id' => $userId]);
-            $labels = $stmt->fetchAll(PDO::FETCH_COLUMN);
-            echo json_encode(['success' => true, 'labels' => $labels]);
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['success' => false]);
-        }
-        ob_end_flush();
-        exit();
-    }
-
-    // Load note for editing (return JSON for AJAX)
-    if (isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id'])) {
-        $noteId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
-        if ($noteId) {
-            if (!isNoteAccessible($pdo, $noteId, $userId)) {
-                http_response_code(403);
-                echo json_encode(['success' => false, 'is_locked' => true]);
-                ob_end_flush();
-                exit();
-            }
-
-            try {
-                $stmt = $pdo->prepare("
-                    SELECT n.*, GROUP_CONCAT(ns.recipient_user_id) as shared_user_ids,
-                           GROUP_CONCAT(ns.permission) as shared_permissions,
-                           GROUP_CONCAT(u2.email) as shared_emails,
-                           GROUP_CONCAT(l.name) as label_names,
-                           GROUP_CONCAT(ni.image_path) as image_paths
-                    FROM notes n
-                    LEFT JOIN note_shares ns ON n.id = ns.note_id
-                    LEFT JOIN users u2 ON ns.recipient_user_id = u2.id
-                    LEFT JOIN note_labels nl ON n.id = nl.note_id
-                    LEFT JOIN labels l ON nl.label_id = l.id
-                    LEFT JOIN note_images ni ON n.id = ni.note_id
-                    WHERE n.id = :id AND (n.user_id = :user_id OR ns.recipient_user_id = :user_id)
-                    GROUP BY n.id
-                ");
-                $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
-                $note = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($note) {
-                    echo json_encode([
-                        'success' => true,
-                        'id' => $note['id'],
-                        'title' => $note['title'],
-                        'content' => $note['content'],
-                        'labels' => $note['label_names'] ? $note['label_names'] : '',
-                        'updated_at' => $note['updated_at'],
-                        'shared_emails' => $note['shared_emails'] ? explode(',', $note['shared_emails']) : [],
-                        'shared_permissions' => $note['shared_permissions'] ? explode(',', $note['shared_permissions']) : [],
-                        'shared_user_ids' => $note['shared_user_ids'] ? explode(',', $note['shared_user_ids']) : [],
-                        'is_owner' => $note['user_id'] == $userId,
-                        'is_locked' => $note['password_hash'] !== null,
-                        'images' => $note['image_paths'] ? explode(',', $note['image_paths']) : [],
-                        'is_pinned' => $note['is_pinned'] == 1,
-                        'is_trashed' => $note['is_trashed'] == 1
-                    ]);
-                } else {
-                    http_response_code(403);
-                    echo json_encode(['success' => false]);
-                }
-            } catch (PDOException $e) {
-                http_response_code(500);
-                echo json_encode(['success' => false]);
-            }
-        } else {
+        sendResponse(true, ['html' => $html]);
+    } elseif ($action === 'labels') {
+        // Load labels
+        $stmt = $pdo->prepare(
+            "SELECT DISTINCT l.name
+             FROM labels l
+             WHERE l.user_id = :user_id"
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $labels = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        sendResponse(true, ['labels' => array_unique(array_filter($labels))]);
+    } elseif ($action === 'upload_image' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Upload image
+        if (!isset($_FILES['image']) || !isset($_POST['note_id'])) {
             http_response_code(400);
-            echo json_encode(['success' => false]);
+            sendResponse(false, [], 'Image or note ID missing');
         }
-        ob_end_flush();
-        exit();
+
+        $noteId = (int)$_POST['note_id'];
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $file = $_FILES['image'];
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            http_response_code(400);
+            sendResponse(false, [], 'Image upload error');
+        }
+
+        $uploadDir = 'Uploads/';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = uniqid('img_') . '.' . $ext;
+        $destination = $uploadDir . $filename;
+
+        if (!move_uploaded_file($file['tmp_name'], $destination)) {
+            http_response_code(500);
+            sendResponse(false, [], 'Failed to save image');
+        }
+
+        $stmt = $pdo->prepare(
+            "INSERT INTO note_images (note_id, image_path) VALUES (:note_id, :image_path)"
+        );
+        $stmt->execute(['note_id' => $noteId, 'image_path' => $destination]);
+        sendResponse(true, ['image_path' => $destination]);
+    } elseif ($action === 'share' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Share note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['emails'], $data['permission'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid share data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $emails = array_filter(array_map('trim', explode(',', $data['emails'])));
+        $permission = $data['permission'] === 'edit' ? 'edit' : 'read';
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        foreach ($emails as $email) {
+            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = :email");
+            $stmt->execute(['email' => $email]);
+            $recipientId = $stmt->fetchColumn();
+
+            if ($recipientId) {
+                $stmt = $pdo->prepare(
+                    "INSERT INTO note_shares (note_id, recipient_user_id, permission) 
+                     VALUES (:note_id, :recipient_user_id, :permission)
+                     ON DUPLICATE KEY UPDATE permission = :permission"
+                );
+                $stmt->execute([
+                    'note_id' => $noteId,
+                    'recipient_user_id' => $recipientId,
+                    'permission' => $permission
+                ]);
+            }
+        }
+
+        sendResponse(true, []);
+    } elseif ($action === 'update_share' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Update share permission
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['user_id'], $data['permission'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid update share data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $recipientId = (int)$data['user_id'];
+        $permission = $data['permission'] === 'edit' ? 'edit' : 'read';
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $ppo->prepare(
+            "UPDATE note_shares SET permission = :permission WHERE note_id = :note_id AND recipient_user_id = :recipient_user_id"
+        );
+        $stmt->execute([
+            'note_id' => $noteId,
+            'recipient_user_id' => $recipientId,
+            'permission' => $permission
+        ]);
+
+        sendResponse(true, []);
+    } elseif ($action === 'revoke_share' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Revoke share
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['user_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid revoke share data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $recipientId = (int)$data['user_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare(
+            "DELETE FROM note_shares WHERE note_id = :note_id AND recipient_user_id = :recipient_user_id"
+        );
+        $stmt->execute(['note_id' => $noteId, 'recipient_user_id' => $recipientId]);
+
+        sendResponse(true, []);
+    } elseif ($action === 'verify_password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Verify password
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['password'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid password data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $password = $data['password'];
+
+        $stmt = $pdo->prepare(
+            "SELECT password_hash FROM notes WHERE id = :id AND (user_id = :user_id OR id IN (SELECT note_id FROM note_shares WHERE recipient_user_id = :user_id))"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        $note = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$note) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack access');
+        }
+
+        if (!$note['password_hash'] || password_verify($password, $note['password_hash'])) {
+            $stmt = $pdo->prepare("UPDATE notes SET is_locked = 0 WHERE id = :id");
+            $stmt->execute(['id' => $noteId]);
+            sendResponse(true, []);
+        } else {
+            http_response_code(403);
+            sendResponse(false, [], 'Incorrect password');
+        }
+    } elseif ($action === 'set_password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Set password
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['password'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid password data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $password = $data['password'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+        $stmt = $pdo->prepare(
+            "UPDATE notes SET password_hash = :password_hash, is_locked = 1 WHERE id = :id"
+        );
+        $stmt->execute(['id' => $noteId, 'password_hash' => $passwordHash]);
+        sendResponse(true, []);
+    } elseif ($action === 'remove_password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Remove password
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid password data');
+        }
+
+        $noteId = (int)$data['note_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare(
+            "UPDATE notes SET password_hash = NULL, is_locked = 0 WHERE id = :id"
+        );
+        $stmt->execute(['id' => $noteId]);
+        sendResponse(true, []);
+    } elseif ($action === 'relock' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Relock note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid relock data');
+        }
+
+        $noteId = (int)$data['note_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare("UPDATE notes SET is_locked = 1 WHERE id = :id");
+        $stmt->execute(['id' => $noteId]);
+        sendResponse(true, []);
+    } elseif ($action === 'pin' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Pin/unpin note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'], $data['pin'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid pin data');
+        }
+
+        $noteId = (int)$data['note_id'];
+        $pin = (int)$data['pin'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $pinnedAt = $pin ? 'NOW()' : 'NULL';
+        $stmt = $pdo->prepare(
+            "UPDATE notes SET is_pinned = :pin, pinned_at = $pinnedAt WHERE id = :id"
+        );
+        $stmt->execute(['id' => $noteId, 'pin' => $pin]);
+        sendResponse(true, []);
+    } elseif ($action === 'trash' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Trash note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid trash data');
+        }
+
+        $noteId = (int)$data['note_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare("UPDATE notes SET is_trashed = 1 WHERE id = :id");
+        $stmt->execute(['id' => $noteId]);
+        sendResponse(true, []);
+    } elseif ($action === 'restore' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Restore note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid restore data');
+        }
+
+        $noteId = (int)$data['note_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare("UPDATE notes SET is_trashed = 0 WHERE id = :id");
+        $stmt->execute(['id' => $noteId]);
+        sendResponse(true, []);
+    } elseif ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Delete note
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['note_id'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid delete data');
+        }
+
+        $noteId = (int)$data['note_id'];
+
+        $stmt = $pdo->prepare(
+            "SELECT user_id FROM notes WHERE id = :id AND user_id = :user_id"
+        );
+        $stmt->execute(['id' => $noteId, 'user_id' => $userId]);
+        if (!$stmt->fetch()) {
+            http_response_code(403);
+            sendResponse(false, [], 'Note not found or you lack permissions');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM notes WHERE id = :id");
+        $stmt->execute(['id' => $noteId]);
+        sendResponse(true, []);
+    } elseif ($action === 'add_label' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Add label
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['label'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid label data');
+        }
+
+        $labelName = trim($data['label']);
+        if (empty($labelName)) {
+            http_response_code(400);
+            sendResponse(false, [], 'Label name required');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+        $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+        if ($stmt->fetch()) {
+            http_response_code(400);
+            sendResponse(false, [], 'Label already exists');
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO labels (user_id, name) VALUES (:user_id, :name)");
+        $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+        sendResponse(true, []);
+    } elseif ($action === 'rename_label' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Rename label
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['old_name'], $data['new_name'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid rename label data');
+        }
+
+        $oldName = trim($data['old_name']);
+        $newName = trim($data['new_name']);
+        if (empty($oldName) || empty($newName)) {
+            http_response_code(400);
+            sendResponse(false, [], 'Old and new label names required');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+        $stmt->execute(['user_id' => $userId, 'name' => $oldName]);
+        $labelId = $stmt->fetchColumn();
+
+        if (!$labelId) {
+            http_response_code(404);
+            sendResponse(false, [], 'Label not found');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+        $stmt->execute(['user_id' => $userId, 'name' => $newName]);
+        if ($stmt->fetch()) {
+            http_response_code(400);
+            sendResponse(false, [], 'New label name already exists');
+        }
+
+        $stmt = $pdo->prepare("UPDATE labels SET name = :new_name WHERE id = :id AND user_id = :user_id");
+        $stmt->execute(['id' => $labelId, 'new_name' => $newName, 'user_id' => $userId]);
+        sendResponse(true, []);
+    } elseif ($action === 'delete_label' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Delete label
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!$data || !isset($data['label'])) {
+            http_response_code(400);
+            sendResponse(false, [], 'Invalid delete label data');
+        }
+
+        $labelName = trim($data['label']);
+        if (empty($labelName)) {
+            http_response_code(400);
+            sendResponse(false, [], 'Label name required');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM labels WHERE user_id = :user_id AND name = :name");
+        $stmt->execute(['user_id' => $userId, 'name' => $labelName]);
+        $labelId = $stmt->fetchColumn();
+
+        if (!$labelId) {
+            http_response_code(404);
+            sendResponse(false, [], 'Label not found');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM note_labels WHERE label_id = :label_id");
+        $stmt->execute(['label_id' => $labelId]);
+
+        $stmt = $pdo->prepare("DELETE FROM labels WHERE id = :id AND user_id = :user_id");
+        $stmt->execute(['id' => $labelId, 'user_id' => $userId]);
+        sendResponse(true, []);
+    } elseif ($action === 'debug_session') {
+        // Debug session
+        error_log("Session debug: user_id = " . ($_SESSION['user_id'] ?? 'none'));
+        sendResponse(true, ['user_id' => $_SESSION['user_id'] ?? null]);
+    } else {
+        http_response_code(400);
+        sendResponse(false, [], 'Invalid action: ' . htmlspecialchars($action));
     }
-
-    // If no valid action is matched
-    http_response_code(400);
-    echo json_encode(['success' => false]);
-    ob_end_flush();
-    exit();
-
+} catch (PDOException $e) {
+    error_log("Backend PDO error: " . $e->getMessage() . " in " . $e->getFile() . " on line " . $e->getLine());
+    error_log("SQL Query: " . ($stmt->queryString ?? 'N/A'));
+    error_log("Parameters: " . print_r($params ?? [], true));
+    sendResponse(false, [], 'Database error: ' . $e->getMessage());
 } catch (Exception $e) {
+    error_log("General error: " . $e->getMessage() . " in " . $e->getFile() . " on line " . $e->getLine());
+    sendResponse(false, [], 'Server error: ' . $e->getMessage());
+} finally {
+    // Clean up output buffer
     ob_end_clean();
-    http_response_code(500);
-    echo json_encode(['success' => false]);
-    exit();
 }
 ?>

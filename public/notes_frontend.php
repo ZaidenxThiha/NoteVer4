@@ -49,7 +49,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id'])) 
         window.userId = <?php echo json_encode($_SESSION['user_id'] ?? null); ?>;
         window.currentNoteId = <?php echo isset($note) && $note ? json_encode($note['id']) : 'null'; ?>;
     </script>
-    <!-- Load scripts with defer and relative paths -->
+    <!-- Load local idb library -->
+    <script src="js/idb.min.js" onerror="console.error('Failed to load local idb library'); alert('Failed to load IndexedDB library. Offline features unavailable.');"></script>
+    <script defer src="js/idb.js"></script>
     <script defer src="js/ui.js"></script>
     <script defer src="js/api.js"></script>
     <script defer src="js/autosave.js"></script>
@@ -58,9 +60,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id'])) 
     <script>
         // Detect script loading errors
         window.addEventListener('error', (event) => {
-            if (event.target && event.target.tagName === 'SCRIPT' && event.target.src.includes('ui.js')) {
-                console.error('Failed to load ui.js:', event.message);
-                alert('Application error: Failed to load UI components. Please check your network and refresh the page.');
+            if (event.target && event.target.tagName === 'SCRIPT') {
+                console.error(`Failed to load script: ${event.target.src}`, event.message);
+                if (event.target.src.includes('idb.min.js')) {
+                    alert('Failed to load IndexedDB library. Offline features unavailable.');
+                } else if (event.target.src.includes('ui.js')) {
+                    alert('Application error: Failed to load UI components. Please check your network and refresh the page.');
+                }
             }
         }, true);
         // Fallback if UI.js fails to load
@@ -322,5 +328,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id'])) 
             </div>
         </div>
     </div>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js')
+                .then(() => console.log('Service Worker registered'))
+                .catch((error) => console.error('Service Worker registration failed:', error));
+        }
+    </script>
 </body>
 </html>

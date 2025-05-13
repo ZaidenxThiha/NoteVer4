@@ -80,6 +80,50 @@ const UI = {
     }, 3000);
   },
 
+  showOfflineStatus() {
+    // Remove any existing offline notification
+    const existing = document.querySelector(".offline-status");
+    if (existing) existing.remove();
+
+    const statusDiv = document.createElement("div");
+    statusDiv.className = "offline-status animate-fade-in";
+    statusDiv.setAttribute("role", "alert");
+    statusDiv.setAttribute("aria-live", "assertive");
+    statusDiv.textContent =
+      "Offline: Changes will sync when connection is restored.";
+    document.body.appendChild(statusDiv);
+    console.log("UI: Showing offline status");
+    setTimeout(() => {
+      statusDiv.className = "offline-status animate-fade-out";
+      setTimeout(() => statusDiv.remove(), 500);
+    }, 5000);
+  },
+
+  showSyncProgress() {
+    // Remove any existing sync notification
+    const existing = document.querySelector(".sync-progress");
+    if (existing) existing.remove();
+
+    const syncDiv = document.createElement("div");
+    syncDiv.className = "sync-progress animate-pulse";
+    syncDiv.setAttribute("role", "alert");
+    syncDiv.setAttribute("aria-live", "assertive");
+    syncDiv.textContent = "Syncing offline changes...";
+    document.body.appendChild(syncDiv);
+    console.log("UI: Showing sync progress");
+  },
+
+  hideSyncProgress() {
+    const syncDiv = document.querySelector(".sync-progress");
+    if (syncDiv) {
+      syncDiv.className = "sync-progress animate-fade-out";
+      setTimeout(() => {
+        syncDiv.remove();
+        console.log("UI: Cleared sync progress");
+      }, 500);
+    }
+  },
+
   showPasswordPrompt(noteId, action, callback, cancelCallback = () => {}) {
     const modal = document.getElementById("passwordModal");
     if (!modal) {
@@ -108,6 +152,8 @@ const UI = {
         : "Unlock Note to View";
     input.value = "";
 
+    // Remove aria-hidden when modal is visible to avoid accessibility issues
+    modal.removeAttribute("aria-hidden");
     const bsModal = new bootstrap.Modal(modal);
     bsModal.show();
 
@@ -149,6 +195,8 @@ const UI = {
       () => {
         input.onkeydown = null;
         submitButton.onclick = null;
+        // Restore aria-hidden when modal is hidden
+        modal.setAttribute("aria-hidden", "true");
         if (typeof cancelCallback === "function") {
           cancelCallback();
         }

@@ -1,93 +1,64 @@
 const API = {
   async saveNote(noteId, data) {
-    const url = noteId
-      ? `notes_backend.php?save=1&id=${encodeURIComponent(noteId)}`
-      : `notes_backend.php?save=1&id=0`;
-    console.log(`Saving note to URL: ${url}`, data);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    console.log(`Saving note ID: ${noteId || "new"}`, data);
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Save note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        let errorData = { error: "Unknown error" };
-        try {
-          errorData = JSON.parse(text);
-        } catch (e) {
-          console.error(`Failed to parse error response: ${e.message}`);
+      const response = await fetch(
+        `notes_backend.php?save=1${noteId ? "&id=" + noteId : ""}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+          credentials: "include",
         }
-        throw new Error(
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Save note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
           `HTTP error! Status: ${response.status}, Message: ${
-            errorData.error || text
+            result.error || JSON.stringify(result)
           }`
         );
+        error.cause = result;
+        throw error;
       }
-      const result = await response.json();
-      console.log(`Save note response:`, result);
+      console.log("Save note successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Save note request timed out");
-      }
-      console.error(`Save note error:`, error);
+      console.error("Save note error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
-  async loadNote(id) {
-    console.log(`Loading note ID: ${id}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+  async loadNote(noteId) {
+    console.log(`Loading note ID: ${noteId}`);
     try {
       const response = await fetch(
-        `notes_backend.php?action=edit&id=${encodeURIComponent(id)}`,
-        {
-          signal: controller.signal,
-        }
+        `notes_backend.php?action=edit&id=${noteId}`,
+        { credentials: "include" }
       );
+      const result = await response.json();
       if (!response.ok) {
-        const text = await response.text();
         console.error(
-          `Load note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
+          `Load note failed: ${response.status} ${response.statusText}`,
+          result
         );
-        let errorData = { error: "Unknown error", is_locked: false };
-        try {
-          errorData = JSON.parse(text);
-        } catch (e) {
-          console.error(`Failed to parse error response: ${e.message}`);
-        }
-        throw new Error(
+        const error = new Error(
           `HTTP error! Status: ${response.status}, Message: ${
-            errorData.error || text
-          }`,
-          { cause: { is_locked: errorData.is_locked || false } }
+            result.error || JSON.stringify(result)
+          }`
         );
+        error.cause = result;
+        throw error;
       }
-      const note = await response.json();
-      console.log(`Load note response:`, note);
-      return note;
+      console.log("Load note successful:", result);
+      return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Load note request timed out");
-      }
-      console.error(`Load note error:`, error);
+      console.error("Load note error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
@@ -95,580 +66,505 @@ const API = {
     console.log(
       `Loading notes with search: ${search}, label: ${label}, is_trashed: ${isTrashed}`
     );
-    const url = `notes_backend.php?action=list&search=${encodeURIComponent(
-      search
-    )}&label=${encodeURIComponent(label)}&is_trashed=${encodeURIComponent(
-      isTrashed
-    )}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
+      const params = new URLSearchParams({
+        search,
+        label,
+        is_trashed: isTrashed,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Load notes failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
+      const response = await fetch(
+        `notes_backend.php?action=notes&${params.toString()}`,
+        { credentials: "include" }
+      );
       const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Load notes failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
       console.log("Raw loadNotes response:", result);
-      if (result.success) {
-        return result.html || "";
-      } else {
-        throw new Error(result.error || "Failed to load notes");
-      }
+      return (
+        result.html || '<div class="no-results"><p>No notes found.</p></div>'
+      );
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Load notes request timed out");
-      }
-      console.error(`Load notes error:`, error);
+      console.error("Load notes error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
   async uploadImage(formData) {
-    console.log(`Uploading images`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    console.log("Uploading image");
     try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=upload_image", {
         method: "POST",
         body: formData,
-        signal: controller.signal,
+        credentials: "include",
       });
-      let errorData = { error: "Unknown error" };
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Upload image failed: ${response.status} ${response.statusText}, Response: ${text}`
-        );
-        if (text) {
-          try {
-            errorData = JSON.parse(text);
-          } catch (e) {
-            console.error(
-              `Failed to parse error response: ${e.message}, Raw response: ${text}`
-            );
-            errorData.error = text || "Server returned an empty response";
-          }
-        } else {
-          errorData.error = "Server returned an empty response";
-        }
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${errorData.error}`
-        );
-      }
       const result = await response.json();
-      console.log("Upload image response:", result);
+      if (!response.ok) {
+        console.error(
+          `Image upload failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Image upload successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Upload image request timed out");
-      }
-      console.error(`Upload image error:`, error);
+      console.error("Image upload error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async addLabel(labelName) {
-    console.log(`Adding label: ${labelName}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `add_label=1&label_name=${encodeURIComponent(labelName)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Add label failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Add label response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Add label request timed out");
-      }
-      console.error(`Add label error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async renameLabel(oldName, newName) {
-    console.log(`Renaming label from ${oldName} to ${newName}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `rename_label=1&old_name=${encodeURIComponent(
-          oldName
-        )}&new_name=${encodeURIComponent(newName)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Rename label failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Rename label response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Rename label request timed out");
-      }
-      console.error(`Rename label error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async deleteLabel(labelName) {
-    console.log(`Deleting label: ${labelName}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `delete_label=1&label_name=${encodeURIComponent(labelName)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Delete label failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Delete label response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Delete label request timed out");
-      }
-      console.error(`Delete label error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async setPassword(noteId, password) {
-    console.log(`Setting password for note ID: ${noteId}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `set_password=1&note_id=${encodeURIComponent(
-          noteId
-        )}&password=${encodeURIComponent(password)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Set password failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Set password response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Set password request timed out");
-      }
-      console.error(`Set password error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async removePassword(noteId) {
-    console.log(`Removing password for note ID: ${noteId}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `remove_password=1&note_id=${encodeURIComponent(noteId)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Remove password failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Remove password response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Remove password request timed out");
-      }
-      console.error(`Remove password error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async verifyPassword(noteId, password) {
-    console.log(`Verifying password for note ID: ${noteId}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `verify_password=1&note_id=${encodeURIComponent(
-          noteId
-        )}&password=${encodeURIComponent(password)}`,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Verify password failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Verify password response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Verify password request timed out");
-      }
-      console.error(`Verify password error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
   async shareNote(noteId, emails, permission) {
     console.log(
-      `Sharing note ID: ${noteId} with emails: ${emails}, permission: ${permission}`
+      `Sharing note ID: ${noteId} with ${emails}, permission: ${permission}`
     );
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=share", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `share_note=1&note_id=${encodeURIComponent(
-          noteId
-        )}&emails=${encodeURIComponent(emails)}&permission=${encodeURIComponent(
-          permission
-        )}`,
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, emails, permission }),
+        credentials: "include",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Share note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
       const result = await response.json();
-      console.log("Share note response:", result);
+      if (!response.ok) {
+        console.error(
+          `Share note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Share note successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Share note request timed out");
-      }
-      console.error(`Share note error:`, error);
+      console.error("Share note error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
-  async updateShare(noteId, recipientUserId, permission) {
+  async updateShare(noteId, userId, permission) {
     console.log(
-      `Updating share for note ID: ${noteId}, user ID: ${recipientUserId}, permission: ${permission}`
+      `Updating share for note ID: ${noteId}, user ID: ${userId}, permission: ${permission}`
     );
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=update_share", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `update_share=1&note_id=${encodeURIComponent(
-          noteId
-        )}&recipient_user_id=${encodeURIComponent(
-          recipientUserId
-        )}&permission=${encodeURIComponent(permission)}`,
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, user_id: userId, permission }),
+        credentials: "include",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Update share failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
       const result = await response.json();
-      console.log("Update share response:", result);
+      if (!response.ok) {
+        console.error(
+          `Update share failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Update share successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Update share request timed out");
-      }
-      console.error(`Update share error:`, error);
+      console.error("Update share error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
-  async revokeShare(noteId, recipientUserId) {
-    console.log(
-      `Revoking share for note ID: ${noteId}, user ID: ${recipientUserId}`
-    );
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+  async revokeShare(noteId, userId) {
+    console.log(`Revoking share for note ID: ${noteId}, user ID: ${userId}`);
     try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=revoke_share", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `revoke_share=1&note_id=${encodeURIComponent(
-          noteId
-        )}&recipient_user_id=${encodeURIComponent(recipientUserId)}`,
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, user_id: userId }),
+        credentials: "include",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Revoke share failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
       const result = await response.json();
-      console.log("Revoke share response:", result);
+      if (!response.ok) {
+        console.error(
+          `Revoke share failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Revoke share successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Revoke share request timed out");
-      }
-      console.error(`Revoke share error:`, error);
+      console.error("Revoke share error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
-  async deleteNote(id) {
-    console.log(`Deleting note ID: ${id}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+  async verifyPassword(noteId, password) {
+    console.log(`Verifying password for note ID: ${noteId}`);
     try {
-      const response = await fetch(
-        `notes_backend.php?delete=1&id=${encodeURIComponent(id)}`,
-        {
-          signal: controller.signal,
-        }
-      );
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Delete note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Delete note response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Delete note request timed out");
-      }
-      console.error(`Delete note error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async pinNote(id, pin) {
-    console.log(`Pinning note ID: ${id}, pin: ${pin}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch(
-        `notes_backend.php?pin=${encodeURIComponent(
-          pin
-        )}&id=${encodeURIComponent(id)}`,
-        { signal: controller.signal }
-      );
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Pin note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
-      const result = await response.json();
-      console.log("Pin note response:", result);
-      return result;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Pin note request timed out");
-      }
-      console.error(`Pin note error:`, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
-  },
-
-  async trashNote(id) {
-    console.log(`Trashing note ID: ${id}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=verify_password", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `trash_note=1&note_id=${encodeURIComponent(id)}`,
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, password }),
+        credentials: "include",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Trash note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
       const result = await response.json();
-      console.log("Trash note response:", result);
+      if (!response.ok) {
+        console.error(
+          `Password verification failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Password verification successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Trash note request timed out");
-      }
-      console.error(`Trash note error:`, error);
+      console.error("Password verification error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
     }
   },
 
-  async restoreNote(id) {
-    console.log(`Restoring note ID: ${id}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+  async setPassword(noteId, password) {
+    console.log(`Setting password for note ID: ${noteId}`);
     try {
-      const response = await fetch("notes_backend.php", {
+      const response = await fetch("notes_backend.php?action=set_password", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `restore_note=1&note_id=${encodeURIComponent(id)}`,
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, password }),
+        credentials: "include",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(
-          `Restore note failed: ${response.status} ${
-            response.statusText
-          }, Response: ${text.slice(0, 100)}...`
-        );
-        throw new Error(
-          `HTTP error! Status: ${response.status}, Message: ${text}`
-        );
-      }
       const result = await response.json();
-      console.log("Restore note response:", result);
+      if (!response.ok) {
+        console.error(
+          `Set password failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Set password successful:", result);
       return result;
     } catch (error) {
-      if (error.name === "AbortError") {
-        throw new Error("Restore note request timed out");
-      }
-      console.error(`Restore note error:`, error);
+      console.error("Set password error:", error);
       throw error;
-    } finally {
-      clearTimeout(timeout);
+    }
+  },
+
+  async removePassword(noteId) {
+    console.log(`Removing password for note ID: ${noteId}`);
+    try {
+      const response = await fetch("notes_backend.php?action=remove_password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Remove password failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Remove password successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Remove password error:", error);
+      throw error;
+    }
+  },
+
+  async relock(noteId) {
+    console.log(`Relocking note ID: ${noteId}`);
+    try {
+      const response = await fetch("notes_backend.php?action=relock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Relock failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Relock successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Relock error:", error);
+      throw error;
+    }
+  },
+
+  async pinNote(noteId, pin) {
+    console.log(`Pinning note ID: ${noteId}, pin: ${pin}`);
+    try {
+      const response = await fetch("notes_backend.php?action=pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId, pin }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Pin note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Pin note successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Pin note error:", error);
+      throw error;
+    }
+  },
+
+  async trashNote(noteId) {
+    console.log(`Trashing note ID: ${noteId}`);
+    try {
+      const response = await fetch("notes_backend.php?action=trash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Trash note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Trash note successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Trash note error:", error);
+      throw error;
+    }
+  },
+
+  async restoreNote(noteId) {
+    console.log(`Restoring note ID: ${noteId}`);
+    try {
+      const response = await fetch("notes_backend.php?action=restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Restore note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Restore note successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Restore note error:", error);
+      throw error;
+    }
+  },
+
+  async deleteNote(noteId) {
+    console.log(`Deleting note ID: ${noteId}`);
+    try {
+      const response = await fetch("notes_backend.php?action=delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note_id: noteId }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Delete note failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Delete note successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Delete note error:", error);
+      throw error;
+    }
+  },
+
+  async addLabel(labelName) {
+    console.log(`Adding label: ${labelName}`);
+    try {
+      const response = await fetch("notes_backend.php?action=add_label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: labelName }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Add label failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Add label successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Add label error:", error);
+      throw error;
+    }
+  },
+
+  async renameLabel(oldName, newName) {
+    console.log(`Renaming label from ${oldName} to ${newName}`);
+    try {
+      const response = await fetch("notes_backend.php?action=rename_label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_name: oldName, new_name: newName }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Rename label failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Rename label successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Rename label error:", error);
+      throw error;
+    }
+  },
+
+  async deleteLabel(labelName) {
+    console.log(`Deleting label: ${labelName}`);
+    try {
+      const response = await fetch("notes_backend.php?action=delete_label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: labelName }),
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        console.error(
+          `Delete label failed: ${response.status} ${response.statusText}`,
+          result
+        );
+        const error = new Error(
+          `HTTP error! Status: ${response.status}, Message: ${
+            result.error || JSON.stringify(result)
+          }`
+        );
+        error.cause = result;
+        throw error;
+      }
+      console.log("Delete label successful:", result);
+      return result;
+    } catch (error) {
+      console.error("Delete label error:", error);
+      throw error;
     }
   },
 };
